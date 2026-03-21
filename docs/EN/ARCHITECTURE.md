@@ -522,12 +522,16 @@ The following functions can only be called by the contract owner (`Owner`) and m
 
 ## 14. Future Evolution Path
 
-| Phase | Scope | Timeline | Description |
-|---|---|---|---|
-| **Phase 1 (Current)** | Web2.5 Hybrid | Live | On-chain escrow + state machine. Off-chain PII + order book. |
-| **Phase 2** | ZK IBAN Verification | 2–3 years | Proof that "TRY was sent to the correct IBAN" without revealing the IBAN on-chain. Requires development of banking infrastructure. |
-| **Phase 3** | On-Chain Order Book | Optional | The Graph Protocol subgraph for order book indexing. Transition when cost-effective compared to MongoDB. |
-| **Phase 4** | Multi-Currency | Post-Phase 2 | Expanding fiat support beyond TRY / USD / EUR. Requires a ZK layer for payment verification. |
+The evolution of the Araf Protocol will proceed through four main phases, driven by technical maturity and ecosystem growth rather than a fixed calendar.
+
+| Phase | Strategic Focus | Key Milestones & Features |
+| :--- | :--- | :--- |
+| **Phase 1** | **Security & Preparation** | • Professional Smart Contract Audit<br>• Base Sepolia Public Beta Launch<br>• Treasury migration to Gnosis Safe (3/5 Multisig)<br>• AWS KMS / HashiCorp Vault Implementation |
+| **Phase 2** | **Mainnet & UX** | • Official Base Mainnet Deployment<br>• Base Smart Wallet (Passkey) Support<br>• Paymaster Integration (Gasless UX)<br>• PWA High-Performance Mobile Interface |
+| **Phase 3** | **Expansion & Multi-Asset** | • Order Book Depth & The Graph Indexing<br>• Multi-Asset Swap (ETH, cbBTC, etc.)<br>• Staking & Reputation Incentives (Retroactive)<br>• Institutional API for Liquidity Providers |
+| **Phase 4** | **Privacy & Global Vision** | • ZK-Proof Based IBAN Verification<br>• OP Superchain Cross-Chain Escrow<br>• Full Anonymity & Global Liquidity Layer |
+
+---
 
 ### Why the Hybrid Model is Honest
 
