@@ -50,6 +50,7 @@ araf-protocol/
 │       │   ├── 📄 receipts.js             # 🔐 Şifreli dekont yükleme (AES-256-GCM + SHA-256 hash)
 │       │   ├── 📄 feedback.js             # Kullanıcı geri bildirimi (kategori zorunlu)
 │       │   └── 📄 stats.js                # Protokol istatistikleri (Redis 1s cache + 30 günlük karşılaştırma)
+│       │   └── 📄 logs.js                # Lig yönetimi 
 │       │
 │       ├── 📁 middleware/
 │       │   ├── 📄 auth.js                 # requireAuth (httpOnly cookie) + requirePIIToken (Bearer)
@@ -97,11 +98,19 @@ araf-protocol/
 │           └── 📄 ArafEscrow.json         # Deploy scripti tarafından otomatik oluşturulur
 │
 └── 📁 docs/                               # Mimari & Operasyonel Dokümantasyon
-       ├── 📁 TR
-       │   └── 📄 ux.md                    # Bu dosya — güncel dizin yapısı
-       ├── 📁 EN/
-       │   └── 📄 ux.md                    # 
-
+│   ├── 📁 tr/                             # Türkçe Dokümantasyon
+│   │   ├── 📄 ARCHITECTURE.md             # Protokol mimarisi (Teknik referans)
+│   │   ├── 📄 API_DOCUMENTATION.md        # Backend API endpoint referansı
+│   │   ├── 📄 LOCAL_DEVELOPMENT.md        # Yerel geliştirme kurulum rehberi
+│   │   ├── 📄 GAME_THEORY.md              # Oyun teorisi ve Bleeding Escrow akışı
+│   │   └── 📄 UX_FLOW.md                  # Kullanıcı deneyimi ve akış şemaları
+│   │
+│   ├── 📁 en/                             # English Documentation
+│   │   ├── 📄 ARCHITECTURE.md             # Protocol architecture
+│   │   ├── 📄 API_DOCUMENTATION.md        # Backend API endpoint reference
+│   │   ├── 📄 LOCAL_DEVELOPMENT.md        # Local setup guide
+│   │   ├── 📄 GAME_THEORY.md              # Game theory & Bleeding Escrow logic
+│   │   └── 📄 UX_FLOW.md                  # UX flow and diagrams
 ```
 
 ---
