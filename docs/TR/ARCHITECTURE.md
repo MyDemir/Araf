@@ -535,12 +535,16 @@ Aşağıdaki fonksiyonlar sadece kontrat sahibi (`Owner`) tarafından çağrıla
 
 ## 14. Gelecek Evrim Yolu
 
-| Faz | Kapsam | Zaman Çizelgesi | Açıklama |
-|---|---|---|---|
-| **Faz 1 (Mevcut)** | Web2.5 Hibrit | Yayında | On-chain escrow + durum makinesi. Off-chain PII + emir defteri. |
-| **Faz 2** | ZK IBAN Doğrulama | 2–3 yıl | "TRY doğru IBAN'a gönderildi" kanıtı, IBAN'ı on-chain açıklamadan. Bankacılık altyapısının gelişmesini gerektirir. |
-| **Faz 3** | On-Chain Emir Defteri | İsteğe Bağlı | Emir defteri indeksleme için The Graph Protocol subgraph. MongoDB'ye kıyasla maliyet etkin olduğunda geçiş. |
-| **Faz 4** | Çoklu Para Birimi | Faz 2 Sonrası | TRY / USD / EUR dışında fiat desteğini genişletme. Ödeme doğrulaması için ZK katmanı gerektirir. |
+Araf Protokolü'nün gelişimi, teknik olgunluk ve ekosistem büyümesine paralel olarak aşağıdaki dört ana aşamada gerçekleşecektir:
+
+| Faz | Odak Noktası | Temel Özellikler & Kilometre Taşları |
+| :--- | :--- | :--- |
+| **Faz 1** | **Güvenlik & Lansman** | • Akıllı Sözleşme Audit (Bağımsız Denetim)<br>• Base Sepolia Public Beta<br>• Gnosis Safe (3/5) Hazine Geçişi<br>• AWS KMS / Vault Entegrasyonu |
+| **Faz 2** | **Mainnet & UX** | • Base Mainnet Resmi Lansman<br>• Base Smart Wallet (Passkey) Desteği<br>• Paymaster (Gasless) Uygulaması<br>• PWA Mobil Arayüz |
+| **Faz 3** | **Genişleme & Likidite** | • Order Book & Subgraph İndeksleme<br>• Multi-Asset Swap (ETH, cbBTC vb.)<br>• Retroactive Staking & Ödül Mekanizması<br>• Kurumsal Maker API Desteği |
+| **Faz 4** | **Gizlilik & Vizyon** | • ZK-Proof ile Anonim IBAN Doğrulama<br>• OP Superchain Cross-Chain Escrow<br>• Küresel Fiat-Kripto Likidite Katmanı |
+
+---
 
 ### Hibrit Neden Dürüsttür
 
