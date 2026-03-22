@@ -72,10 +72,10 @@ Araf, blokzincirin tavizsiz güvenliğini modern webin kullanıcı deneyimi ve g
 ---
 
 ## 📖 Documentation / Dokümantasyon
-* **Canonical Architecture / Kanonik Mimari:** [English Version (EN)](./docs/ARCHITECTURE_EN.md) | [Türkçe Versiyon (TR)](./docs/ARCHITECTURE_TR.md)
-* **API Reference / API Referansı:** [Documentation](./docs/API_DOCUMENTATION.md)
-* **Game Theory / Oyun Teorisi:** [Flowcharts & Logic](./docs/GAME_THEORY.md)
-* **Project Structure / Dosya Yapısı:** [Directory Guide](./docs/ux.md)
+* **Canonical Architecture / Kanonik Mimari:** [English Version (EN)](./docs/EN/ARCHITECTURE.md) | [Türkçe Versiyon (TR)](./docs/ARCHITECTURE.md)
+* **API Reference / API Referansı:** [Documentation](./docs/EN/API.md)
+* **Game Theory / Oyun Teorisi:** [Flowcharts & Logic](./docs/EN/GAME_THEORY.md)
+* **Project Structure / Dosya Yapısı:** [Directory Guide](./docs/EN/ux.md)
 
 ---
 *Araf Protocol — "The system doesn't judge. It makes dishonesty expensive."*
