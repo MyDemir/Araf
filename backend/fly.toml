@@ -1,0 +1,41 @@
+# fly.toml app configuration file generated for araf-protocol-backend
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "araf-protocol-backend"
+primary_region = "ams" # Amsterdam. İhtiyaca göre değiştirilebilir.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT       = "4000"
+  NODE_ENV   = "production"
+
+[[http_service]]
+  internal_port = 4000
+  force_https = true
+  # KRİTİK: Event listener'ın sürekli çalışması için makine asla durdurulmamalı.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1 # Her zaman en az 1 makine ayakta kalmalı.
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512 # Event listener ve periyodik işler için 512MB daha güvenli.
+
+[[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+    protocol = "http" # Konteyner içinde HTTP, dışarıda HTTPS (force_https=true ile)
