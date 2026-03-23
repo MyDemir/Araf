@@ -72,7 +72,7 @@ Araf, blokzincirin tavizsiz güvenliğini modern webin kullanıcı deneyimi ve g
 ---
 
 ## 📖 Documentation / Dokümantasyon
-* **Canonical Architecture / Kanonik Mimari:** [English Version (EN)](./docs/EN/ARCHITECTURE.md) | [Türkçe Versiyon (TR)](./docs/ARCHITECTURE.md)
+* **Canonical Architecture / Kanonik Mimari:** [English Version (EN)](./docs/EN/ARCHITECTURE.md) | [Türkçe Versiyon (TR)](./docs/TR/ARCHITECTURE.md)
 * **API Reference / API Referansı:** [Documentation](./docs/EN/API.md)
 * **Game Theory / Oyun Teorisi:** [Flowcharts & Logic](./docs/EN/GAME_THEORY.md)
 * **Project Structure / Dosya Yapısı:** [Directory Guide](./docs/EN/ux.md)
