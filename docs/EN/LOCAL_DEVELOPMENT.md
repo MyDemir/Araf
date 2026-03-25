@@ -1,8 +1,8 @@
 # Araf Protocol — Deployment Guide
 
-> **Version:** 2.0 | **Last Updated:** March 2026
->
-> This guide covers three environments: Local Development · Public Testnet (Base Sepolia) · Mainnet (Base)
+> **Version:** 2.1  
+> **Last Updated:** March 2026  
+> This guide covers three environments: **Local Development** · **Public Testnet (Base Sepolia)** · **Mainnet (Base)**
 
 ---
 
@@ -18,66 +18,89 @@
 
 ## 1. Local Development
 
+Local development is now **chain-first** and should be tested that way.
+
+Important local rules:
+- If you start a separate Hardhat node with `npx hardhat node`, deploy to **`localhost`**, not `hardhat`.
+- `/health` is **liveness only**.
+- `/ready` is the actual **readiness** endpoint.
+- Local SIWE should use an explicit `SIWE_DOMAIN` + `SIWE_URI` pair.
+- Listing creation is now authoritative through **`listing_ref`**:
+  - backend creates `listing_ref`
+  - frontend sends `createEscrow(..., listingRef)`
+  - worker links `EscrowCreated(..., listingRef)` back to the listing
+
 ### Prerequisites
 - Node.js `v18+`
-- Docker Desktop (easiest way for MongoDB and Redis)
-- MetaMask — Hardhat network will be added
+- Docker Desktop (recommended for MongoDB and Redis)
+- MetaMask
 
-### Step 1 — Database & Cache (Setup via Docker)
-MongoDB and Redis must be running for the backend to function. If Docker is installed, you can start them in the background by running these commands in your terminal:
+### Step 1 — Start MongoDB and Redis
 
 ```bash
-# Start MongoDB
 docker run -d --name araf-mongo -p 27017:27017 mongo:latest
-
-# Start Redis
 docker run -d --name araf-redis -p 6379:6379 redis:latest
 ```
-*(To stop: `docker stop araf-mongo araf-redis`)*
+
+To stop them later:
+
+```bash
+docker stop araf-mongo araf-redis
+```
 
 ### Step 2 — Install Dependencies
 
 ```bash
-# In the project root directory
 cd contracts && npm install && cd ..
 cd backend  && npm install && cd ..
 cd frontend && npm install && cd ..
 ```
 
-### Step 3 — Terminal 1: Hardhat Node
+### Step 3 — Terminal 1: Start Hardhat Node
 
 ```bash
 cd contracts
 npx hardhat node
 ```
 
-The output will list 20 test wallets and their private keys. `Account #0` will be used as the deployer, and `Account #1` as the treasury.
+This prints 20 funded test wallets.
 
-### Step 4 — Terminal 2: Deploy Contracts
+Recommended usage:
+- `Account #0` → deployer
+- `Account #1` → treasury
+- `Account #2` → relayer
+
+### Step 4 — Terminal 2: Deploy Contracts to `localhost`
+
+Create `contracts/.env`:
 
 ```bash
-# Create contracts/.env file
 cat > contracts/.env << 'EOF'
-# Enter Account #1 address here
 TREASURY_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
-# Account #0 private key
 DEPLOYER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 EOF
-
-npx hardhat run scripts/deploy.js --network hardhat
 ```
 
-Note the following values from the output:
-```text
-VITE_ESCROW_ADDRESS="0x..."
-VITE_USDT_ADDRESS="0x..."
-VITE_USDC_ADDRESS="0x..."
-```
-
-### Step 5 — Terminal 2: Backend Configuration
+Deploy:
 
 ```bash
-# Create backend/.env file
+cd contracts
+npx hardhat run scripts/deploy.js --network localhost
+```
+
+Note the deploy output values:
+
+```text
+VITE_ESCROW_ADDRESS=0x...
+VITE_USDT_ADDRESS=0x...
+VITE_USDC_ADDRESS=0x...
+```
+
+### Step 5 — Terminal 3: Backend Configuration
+
+Create `backend/.env`:
+
+```bash
 cat > backend/.env << 'EOF'
 PORT=4000
 NODE_ENV=development
@@ -85,124 +108,206 @@ NODE_ENV=development
 MONGODB_URI=mongodb://127.0.0.1:27017/araf_dev
 REDIS_URL=redis://127.0.0.1:6379
 
-# Generate a minimum 64-character string:
+# Generate a strong secret:
 # node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-JWT_SECRET=generate_your_own_64_character_string_here
+JWT_SECRET=<GENERATE_A_REAL_64+_CHAR_SECRET>
 JWT_EXPIRES_IN=15m
 PII_TOKEN_EXPIRES_IN=15m
 
 KMS_PROVIDER=env
+# Generate 32 bytes hex:
 # node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-MASTER_ENCRYPTION_KEY=generate_your_own_32_byte_string_here
+MASTER_ENCRYPTION_KEY=<GENERATE_A_REAL_32_BYTE_HEX_KEY>
 
-BASE_RPC_URL=[http://127.0.0.1:8545](http://127.0.0.1:8545)
-ARAF_ESCROW_ADDRESS=<address_from_deploy_output>
+BASE_RPC_URL=http://127.0.0.1:8545
+ARAF_ESCROW_ADDRESS=<DEPLOY_OUTPUT_ESCROW_ADDRESS>
 CHAIN_ID=31337
-
 TREASURY_ADDRESS=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
-
-# Use Account #2 private key for Relayer
 RELAYER_PRIVATE_KEY=0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a
 
-SIWE_DOMAIN=localhost
+SIWE_DOMAIN=localhost:5173
+SIWE_URI=http://localhost:5173
 ALLOWED_ORIGINS=http://localhost:5173
-EOF
 
-cd backend && npm run dev
+# Optional for local clarity; recommended when you want deterministic replay boot:
+WORKER_START_BLOCK=0
+EOF
 ```
 
-### Step 6 — Terminal 3: Frontend Configuration
+Start backend:
 
 ```bash
-# Create frontend/.env.development file
-cat > frontend/.env.development << 'EOF'
-VITE_API_URL=http://localhost:4000
-VITE_ESCROW_ADDRESS=<address_from_deploy_output>
-VITE_USDT_ADDRESS=<usdt_address_from_deploy_output>
-VITE_USDC_ADDRESS=<usdc_address_from_deploy_output>
-EOF
-
-cd frontend && npm run dev
+cd backend
+npm run dev
 ```
 
-### Step 7 — Add MetaMask Hardhat Network
+### Step 6 — Terminal 4: Frontend Configuration
+
+Create `frontend/.env.development`:
+
+```bash
+cat > frontend/.env.development << 'EOF'
+VITE_API_URL=http://localhost:4000
+VITE_ESCROW_ADDRESS=<DEPLOY_OUTPUT_ESCROW_ADDRESS>
+VITE_USDT_ADDRESS=<DEPLOY_OUTPUT_USDT_ADDRESS>
+VITE_USDC_ADDRESS=<DEPLOY_OUTPUT_USDC_ADDRESS>
+EOF
+```
+
+Start frontend:
+
+```bash
+cd frontend
+npm run dev
+```
+
+### Step 7 — Add Hardhat Local Network to MetaMask
 
 | Field | Value |
 |------|-------|
 | Network Name | Hardhat Local |
 | RPC URL | `http://127.0.0.1:8545` |
 | Chain ID | `31337` |
-| Currency | ETH |
+| Currency Symbol | ETH |
 
-Import the test private keys provided by Hardhat into your MetaMask.
+Import the Hardhat test keys into MetaMask.
 
-### Step 8 — Run Tests
+### Step 8 — Run Contract Tests
 
 ```bash
 cd contracts
-
-# Including K-04/K-05 fixes — all tests should pass
 npx hardhat test
-
-# Coverage report (optional)
 npx hardhat coverage
 ```
 
-### Local Test Checklist
+### Step 9 — Local Full-Stack Smoke Test
 
-- [ ] `npx hardhat node` — 20 accounts visible
-- [ ] `npx hardhat test` — all tests ✅
-- [ ] Backend `http://localhost:4000/health` → `{"status":"ok"}`
-- [ ] Frontend `http://localhost:5173` — opens successfully
-- [ ] MetaMask on Hardhat network — `chainId: 31337`
-- [ ] Get Test USDT button — mock faucet works
-- [ ] Full trade lifecycle: create → lock → pay → release
+Run this flow end to end:
+
+1. Open frontend at `http://localhost:5173`
+2. Confirm backend liveness:
+   - `GET http://localhost:4000/health`
+3. Confirm backend readiness:
+   - `GET http://localhost:4000/ready`
+4. Connect MetaMask on chain `31337`
+5. Complete SIWE login
+6. Mint test USDT/USDC from the UI
+7. Create a maker listing
+8. Confirm backend generated `listing_ref`
+9. Confirm frontend calls `createEscrow(token, amount, tier, listingRef)`
+10. Confirm worker links `EscrowCreated(..., listingRef)` to the correct listing
+11. Start trade as taker
+12. Upload receipt
+13. Call `reportPayment`
+14. Release funds as maker
+15. Separately test:
+   - cancel flow
+   - challenge flow
+   - bleeding flow
+   - DLQ remains empty or only contains expected test entries
+
+### Local Development Checklist
+
+- [ ] `npx hardhat node` is running
+- [ ] `npx hardhat test` passes
+- [ ] `GET /health` returns liveness OK
+- [ ] `GET /ready` returns readiness OK
+- [ ] Frontend opens at `http://localhost:5173`
+- [ ] MetaMask is on `chainId: 31337`
+- [ ] SIWE login succeeds
+- [ ] Mock faucet works
+- [ ] `listing_ref` is generated on listing creation
+- [ ] `createEscrow(..., listingRef)` succeeds
+- [ ] Worker links `EscrowCreated(..., listingRef)` correctly
+- [ ] Full trade lifecycle works: create → lock → pay → release
+- [ ] Cancel flow works
+- [ ] Challenge / bleeding flow works
+- [ ] DLQ is clean or understood
 
 ---
 
 ## 2. Common Local Issues (Troubleshooting)
 
-The most common issues encountered when developing locally (or in Codespaces) and their solutions:
+### ❌ Port Already in Use (`EADDRINUSE`)
 
-### ❌ Port Already in Use (EADDRINUSE)
-If you get this error when starting the Backend (`4000`) or Frontend (`5173`), there is a "zombie" Node.js process left open in the background.
+If backend (`4000`) or frontend (`5173`) fails to start because the port is already in use:
 
-**Solution (Free up the port):**
 ```bash
-# For Mac and Linux (Kills all node processes):
+# macOS / Linux
 killall -9 node
 
-# For Windows (PowerShell):
+# Windows PowerShell
 taskkill /F /IM node.exe
 ```
-If you want to kill only a specific port (e.g., 4000):
+
+Or free a single port:
+
 ```bash
-# Mac/Linux:
+# macOS / Linux
 lsof -i :4000
-kill -9 <PID_NUMBER>
+kill -9 <PID>
 ```
 
-### ❌ MetaMask Nonce Error (Transaction Pending/Stuck)
-When you restart the Hardhat node (Terminal 1), the blockchain is "reset". However, your MetaMask wallet remembers the transaction sequence (Nonce) from the old sessions. This locks up the wallet when you try to send a new transaction.
+### ❌ MetaMask Nonce / Stuck Pending Transaction
 
-**Solution (Reset Account):**
-1. Open the MetaMask extension.
-2. Go to **Settings** from the three dots (or profile picture) in the top right.
-3. Click the **Advanced** tab.
-4. Click the **"Clear Activity Data"** button. (This does not delete your balance or accounts, it only resets the transaction history).
+If you restart Hardhat node, the chain resets but MetaMask remembers prior local nonces.
 
-### ❌ Codespaces Resource Limits (Resource Pressure)
-GitHub Codespaces (Free tier) can quickly hit RAM limits when running MongoDB, Redis, Hardhat, Backend, and Frontend simultaneously. If your Codespace crashes or the terminal freezes:
+Fix:
+1. Open MetaMask
+2. Go to **Settings**
+3. Open **Advanced**
+4. Click **Clear Activity Data**
 
-**Solution:**
-1. Temporarily Stop Docker Containers: If you are only designing the Frontend, shut down the backend/database duo: `docker stop araf-mongo araf-redis`.
-2. Clone Locally (Recommended): If you are going to run full integration tests, pull the project directly to your own computer using `git clone` and work without limitations (using Docker Desktop).
+### ❌ `/ready` fails while `/health` passes
+
+This is expected if the app is alive but not actually ready.
+
+Typical causes:
+- MongoDB not connected
+- Redis not connected
+- worker not running
+- bad `SIWE_DOMAIN` / `SIWE_URI`
+- missing `ARAF_ESCROW_ADDRESS`
+- missing `BASE_RPC_URL`
+
+Use `/ready`, not `/health`, to judge whether local integration is truly bootstrapped.
+
+### ❌ SIWE Login Fails Locally
+
+Check these first:
+- `SIWE_DOMAIN=localhost:5173`
+- `SIWE_URI=http://localhost:5173`
+- `ALLOWED_ORIGINS=http://localhost:5173`
+- frontend actually loads from `http://localhost:5173`
+
+If those differ, backend exact-origin SIWE checks will reject login.
+
+### ❌ Listing Created but Worker Does Not Link It
+
+Check:
+- listing has a `listing_ref`
+- frontend passed that `listing_ref` to `createEscrow`
+- worker received `EscrowCreated(..., listingRef)`
+- worker/provider is running and `/ready` is healthy
+
+If `listing_ref` is missing or mismatched, the system should fail closed instead of heuristically assigning ownership.
+
+### ❌ Codespaces Resource Pressure
+
+If you run MongoDB, Redis, Hardhat, backend, and frontend together in a constrained Codespace, RAM pressure may freeze the session.
+
+Mitigations:
+1. Stop Docker containers temporarily if not needed:
+   ```bash
+   docker stop araf-mongo araf-redis
+   ```
+2. Prefer local machine execution for full-stack integration and dispute-flow testing.
 
 ### 🔎 Centralized Error Monitoring
-Thanks to our error-catching system, all system events (including UI crashes, contract cancellations, API rejections) are accumulated in a single file. Always keep this log open in a terminal tab while developing:
+
+Keep logs open while testing:
 
 ```bash
-# In the root directory (or backend directory)
 tail -f araf_full_stack.log.txt
 ```
 
@@ -211,288 +316,238 @@ tail -f araf_full_stack.log.txt
 ## 3. Public Testnet — Base Sepolia
 
 ### Prerequisites
-- Base Sepolia network configured in MetaMask
-- Base Sepolia ETH (Faucet: `faucet.quicknode.com` or `sepoliafaucet.com`)
-- Alchemy/Infura account (for RPC)
-- MongoDB Atlas account (free M0)
-- Upstash Redis account (free)
-- Fly.io account (for backend)
-- Vercel account (for frontend)
-- BaseScan API key (`basescan.org/myapikey`)
+- Base Sepolia configured in MetaMask
+- Base Sepolia ETH from a faucet
+- Alchemy / Infura account
+- MongoDB Atlas
+- Upstash Redis
+- Fly.io account
+- Vercel account
+- BaseScan API key
 
-### Step 1 — Deploy Contracts (Base Sepolia)
+### Step 1 — Deploy Contracts
+
+Create `contracts/.env`:
 
 ```bash
-# Update contracts/.env
 cat > contracts/.env << 'EOF'
-DEPLOYER_PRIVATE_KEY=0x<testnet_deployer_private_key>
-TREASURY_ADDRESS=0x<testnet_treasury_wallet>
-BASE_SEPOLIA_RPC_URL=[https://base-sepolia.g.alchemy.com/v2/](https://base-sepolia.g.alchemy.com/v2/)<API_KEY>
-BASESCAN_API_KEY=<basescan_api_key>
+DEPLOYER_PRIVATE_KEY=0x<TESTNET_DEPLOYER_PRIVATE_KEY>
+TREASURY_ADDRESS=0x<TESTNET_TREASURY_WALLET>
+BASE_SEPOLIA_RPC_URL=https://base-sepolia.g.alchemy.com/v2/<API_KEY>
+BASESCAN_API_KEY=<BASESCAN_API_KEY>
 REPORT_GAS=true
 EOF
+```
 
+Deploy:
+
+```bash
 cd contracts
-
-# Compile
 npx hardhat compile
-
-# Deploy
 npx hardhat run scripts/deploy.js --network base-sepolia
 ```
 
-Take note from the output:
-```text
-✅ ArafEscrow deployed:       0x...
-✅ MockUSDT deployed:         0x...
-✅ MockUSDC deployed:         0x...
-✅ Ownership transferred →    0x<treasury>
-```
+Expected output includes:
+- `ArafEscrow` address
+- `MockUSDT` address
+- `MockUSDC` address
+- ownership transfer confirmation
 
-### Step 2 — Verify Contracts (BaseScan)
+### Step 2 — Verify on BaseScan
 
 ```bash
 cd contracts
 
-# Verify ArafEscrow
-npx hardhat verify --network base-sepolia \
-  <ARAF_ESCROW_ADDRESS> \
-  <TREASURY_ADDRESS>
-
-# Verify MockUSDT
-npx hardhat verify --network base-sepolia \
-  <USDT_ADDRESS> \
-  "Mock USDT" "USDT" 6
-
-# Verify MockUSDC
-npx hardhat verify --network base-sepolia \
-  <USDC_ADDRESS> \
-  "Mock USDC" "USDC" 6
+npx hardhat verify --network base-sepolia <ARAF_ESCROW_ADDRESS> <TREASURY_ADDRESS>
+npx hardhat verify --network base-sepolia <USDT_ADDRESS> "Mock USDT" "USDT" 6
+npx hardhat verify --network base-sepolia <USDC_ADDRESS> "Mock USDC" "USDC" 6
 ```
 
-### Step 3 — Backend: Deploy to Fly.io
+### Step 3 — Deploy Backend to Fly.io
 
 ```bash
-# Install Fly.io CLI (macOS/Linux)
-curl -L [https://fly.io/install.sh](https://fly.io/install.sh) | sh
-
-# Login
-fly auth login
-
-# Go to backend directory
 cd backend
-
-# Create app (first time)
 fly apps create araf-protocol-backend
 
-# Set secrets (all at once)
 fly secrets set \
   NODE_ENV="production" \
   MONGODB_URI="mongodb+srv://<user>:<pass>@cluster.mongodb.net/araf_testnet" \
   REDIS_URL="rediss://:<token>@<host>.upstash.io:6379" \
-  JWT_SECRET="<64_character_hex>" \
+  JWT_SECRET="<64+_CHAR_SECRET>" \
   JWT_EXPIRES_IN="15m" \
   PII_TOKEN_EXPIRES_IN="15m" \
   KMS_PROVIDER="env" \
-  MASTER_ENCRYPTION_KEY="<32_byte_hex>" \
-  BASE_RPC_URL="[https://base-sepolia.g.alchemy.com/v2/](https://base-sepolia.g.alchemy.com/v2/)<API_KEY>" \
-  BASE_WS_RPC_URL="wss://[base-sepolia.g.alchemy.com/v2/](https://base-sepolia.g.alchemy.com/v2/)<API_KEY>" \
+  MASTER_ENCRYPTION_KEY="<32_BYTE_HEX>" \
+  BASE_RPC_URL="https://base-sepolia.g.alchemy.com/v2/<API_KEY>" \
+  BASE_WS_RPC_URL="wss://base-sepolia.g.alchemy.com/v2/<API_KEY>" \
   ARAF_ESCROW_ADDRESS="<DEPLOY_ADDRESS>" \
   CHAIN_ID="84532" \
   TREASURY_ADDRESS="<TREASURY_WALLET>" \
-  RELAYER_PRIVATE_KEY="0x<relayer_private_key>" \
-  SIWE_DOMAIN="araf-protocol-backend.fly.dev" \
-  ALLOWED_ORIGINS="[https://araf-protocol.vercel.app](https://araf-protocol.vercel.app)"
+  RELAYER_PRIVATE_KEY="0x<RELAYER_PRIVATE_KEY>" \
+  SIWE_DOMAIN="araf-protocol.vercel.app" \
+  SIWE_URI="https://araf-protocol.vercel.app" \
+  ALLOWED_ORIGINS="https://araf-protocol.vercel.app" \
+  ARAF_DEPLOYMENT_BLOCK="<DEPLOY_BLOCK_NUMBER>"
 
-# Deploy
 fly deploy
-
-# Watch logs
 fly logs --app araf-protocol-backend
 ```
 
-> **Note:** The `auto_stop_machines = false` setting in the `fly.toml` file is mandatory for the event listener to run continuously. Do not change it.
-
-### Step 4 — Frontend: Deploy to Vercel
+If this is the first deploy and Redis has no checkpoint yet, seed it once:
 
 ```bash
-# Install Vercel CLI
-npm install -g vercel
+redis-cli -u "$REDIS_URL" SET worker:last_block "$ARAF_DEPLOYMENT_BLOCK"
+```
 
-# Go to frontend directory
-cd frontend
+### Step 4 — Deploy Frontend to Vercel
 
-# Update the proxy URL in vercel.json
-# "destination" → "[https://araf-protocol-backend.fly.dev/api/$1](https://araf-protocol-backend.fly.dev/api/$1)"
+Create `frontend/.env.production`:
 
-# Create Production env file
-cat > .env.production << 'EOF'
-VITE_API_URL=[https://araf-protocol-backend.fly.dev](https://araf-protocol-backend.fly.dev)
+```bash
+cat > frontend/.env.production << 'EOF'
+VITE_API_URL=https://araf-protocol-backend.fly.dev
 VITE_ESCROW_ADDRESS=<DEPLOY_ADDRESS>
 VITE_USDT_ADDRESS=<USDT_ADDRESS>
 VITE_USDC_ADDRESS=<USDC_ADDRESS>
 EOF
-
-# Deploy
-vercel --prod
-
-# or for automatic deploy with GitHub integration:
-# vercel link → connect GitHub repo → auto deploy on every main push
 ```
 
-Environment Variables must also be set in Vercel (Dashboard → Settings → Environment Variables).
-
-### Step 5 — Update SIWE Domain
-
-Once the backend deploy URL is established:
+Deploy:
 
 ```bash
-# Set SIWE_DOMAIN in Backend to match frontend domain
-fly secrets set SIWE_DOMAIN="araf-protocol.vercel.app"
+cd frontend
+vercel --prod
 ```
 
-### Step 6 — Remove Hardhat Chain from main.jsx
+### Step 5 — Testnet Checklist
 
-```jsx
-// frontend/src/main.jsx — hardhat chain is not needed for testnet
-import { base, baseSepolia } from 'wagmi/chains'
-// remove hardhat import
-
-const config = createConfig({
-  chains: [base, baseSepolia], // hardhat removed
-  transports: {
-    [base.id]:       http(),
-    [baseSepolia.id]: http(),
-  },
-})
-```
-
-### Testnet Checklist
-
-- [ ] `https://sepolia.basescan.org/address/<ESCROW_ADDRESS>` — contract verified ✅
-- [ ] `https://araf-protocol-backend.fly.dev/health` → `{"status":"ok","worker":"active"}`
-- [ ] `https://araf-protocol.vercel.app` — site opens
-- [ ] MetaMask connected to Base Sepolia
-- [ ] Test USDT/USDC faucet is working
-- [ ] SIWE login successful
-- [ ] Full trade lifecycle: create → lock → pay → release
-- [ ] Dispute → bleeding → cancel
-- [ ] Event listener logs are clean (`fly logs`)
+- [ ] Contracts verified on BaseScan
+- [ ] Backend `/health` responds
+- [ ] Backend `/ready` responds OK
+- [ ] Frontend opens successfully
+- [ ] MetaMask is connected to Base Sepolia
+- [ ] SIWE login succeeds
+- [ ] Mock USDT/USDC faucet works
+- [ ] Full lifecycle works: create → lock → pay → release
+- [ ] Challenge / bleeding / cancel flows work
+- [ ] `listing_ref` flow works end to end
+- [ ] Fly logs are clean
 
 ---
 
 ## 4. Mainnet — Base
 
-> ⚠️ **Mandatory before Mainnet:** A professional smart contract security audit must be completed.
+> **Mandatory before Mainnet:** complete a professional security audit and close findings.
 
 ### Testnet vs Mainnet Differences
 
 | Field | Testnet | Mainnet |
 |------|---------|---------|
-| MockERC20 | Deployed | **Not Deployed** (`NODE_ENV=production`) |
+| MockERC20 | Deployed | **Not deployed** (`NODE_ENV=production`) |
 | KMS | `env` (temporary) | AWS KMS or HashiCorp Vault |
-| Treasury | Test wallet | **Gnosis Safe multisig** (min 3/5) |
-| RPC | Alchemy Sepolia | Alchemy/Infura Base Mainnet |
-| Chain ID | 84532 | 8453 |
-| Relayer | Manual wallet | Gelato Automation (recommended) |
+| Treasury | Test wallet | **Gnosis Safe multisig** |
+| RPC | Sepolia RPC | Base Mainnet RPC |
+| Chain ID | `84532` | `8453` |
+| Relayer | Manual wallet | Gelato Automation recommended |
 | Audit | Optional | **Mandatory** |
 
-### Step 1 — Gnosis Safe Preparation
+### Step 1 — Prepare Treasury
 
-1. `safe.global` → Base Mainnet → New Safe
-2. Configure a minimum of 3/5 signers
-3. Use the Safe address as the `TREASURY_ADDRESS`
-4. **Do not use a single EOA treasury** — if the private key leaks, all protocol funds are at risk.
+Use a Gnosis Safe on Base Mainnet.
 
-### Step 2 — AWS KMS Setup (Production Encryption)
+Minimum recommendation:
+- 3/5 multisig
+
+Never use a single EOA treasury in production.
+
+### Step 2 — Prepare Production Encryption
+
+Recommended:
+- AWS KMS
+- or HashiCorp Vault
+
+### Step 3 — Deploy Contracts
+
+Create `contracts/.env`:
 
 ```bash
-# Create KMS key via AWS CLI
-aws kms create-key \
-  --description "Araf Protocol PII Master Key" \
-  --region eu-west-1
-
-# Generate data key (plaintext + encrypted)
-aws kms generate-data-key \
-  --key-id <KMS_KEY_ARN> \
-  --key-spec AES_256 \
-  --region eu-west-1
-
-# Take the encrypted data key from the output (CiphertextBlob → base64)
-# Save it to the AWS_ENCRYPTED_DATA_KEY variable
+cat > contracts/.env << 'EOF'
+DEPLOYER_PRIVATE_KEY=0x<MAINNET_DEPLOYER_PRIVATE_KEY>
+TREASURY_ADDRESS=0x<GNOSIS_SAFE_ADDRESS>
+BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<API_KEY>
+BASESCAN_API_KEY=<BASESCAN_API_KEY>
+MAINNET_USDT_ADDRESS=0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
+MAINNET_USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+EOF
 ```
 
-### Step 3 — Deploy Contracts (Base Mainnet)
+Deploy:
 
 ```bash
-# Update contracts/.env
-cat > contracts/.env << 'EOF'
-DEPLOYER_PRIVATE_KEY=0x<mainnet_deployer_private_key>
-TREASURY_ADDRESS=0x<gnosis_safe_address>
-BASE_RPC_URL=[https://base-mainnet.g.alchemy.com/v2/](https://base-mainnet.g.alchemy.com/v2/)<API_KEY>
-BASESCAN_API_KEY=<basescan_api_key>
-EOF
-
-# Set NODE_ENV to production so MockERC20 is NOT deployed
+cd contracts
 NODE_ENV=production npx hardhat run scripts/deploy.js --network base
-
-# Verify
 npx hardhat verify --network base <ESCROW_ADDRESS> <GNOSIS_SAFE_ADDRESS>
 ```
 
-### Step 4 — Backend: Production Secrets
+### Step 4 — Production Backend Configuration
 
 ```bash
-# Fly.io production secrets
 fly secrets set \
   NODE_ENV="production" \
   KMS_PROVIDER="aws" \
-  AWS_KMS_KEY_ARN="arn:aws:kms:eu-west-1:...:key/..." \
-  AWS_ENCRYPTED_DATA_KEY="<base64_CiphertextBlob>" \
+  AWS_KMS_KEY_ARN="arn:aws:kms:..." \
+  AWS_ENCRYPTED_DATA_KEY="<BASE64_CIPHERTEXT_BLOB>" \
   AWS_REGION="eu-west-1" \
-  BASE_RPC_URL="[https://base-mainnet.g.alchemy.com/v2/](https://base-mainnet.g.alchemy.com/v2/)<API_KEY>" \
-  BASE_WS_RPC_URL="wss://[base-mainnet.g.alchemy.com/v2/](https://base-mainnet.g.alchemy.com/v2/)<API_KEY>" \
+  BASE_RPC_URL="https://base-mainnet.g.alchemy.com/v2/<API_KEY>" \
+  BASE_WS_RPC_URL="wss://base-mainnet.g.alchemy.com/v2/<API_KEY>" \
   CHAIN_ID="8453" \
   ARAF_ESCROW_ADDRESS="<MAINNET_ESCROW>" \
   TREASURY_ADDRESS="<GNOSIS_SAFE>" \
   SIWE_DOMAIN="app.araf.xyz" \
-  ALLOWED_ORIGINS="[https://app.araf.xyz](https://app.araf.xyz)"
-  # RELAYER_PRIVATE_KEY → Use Gelato Automation on Mainnet
+  SIWE_URI="https://app.araf.xyz" \
+  ALLOWED_ORIGINS="https://app.araf.xyz"
+```
 
+Deploy backend:
+
+```bash
 fly deploy
 ```
 
-### Step 5 — Frontend Production Configuration
+### Step 5 — Production Frontend Configuration
 
 ```bash
-# main.jsx — mainnet only
-import { base } from 'wagmi/chains'
-
-# .env.production
-VITE_API_URL=[https://api.araf.xyz](https://api.araf.xyz)
+cat > frontend/.env.production << 'EOF'
+VITE_API_URL=https://api.araf.xyz
 VITE_ESCROW_ADDRESS=<MAINNET_ESCROW>
-# VITE_USDT_ADDRESS and VITE_USDC_ADDRESS → real Base USDT/USDC addresses
-# Base USDT: 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
-# Base USDC: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+VITE_USDT_ADDRESS=0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
+VITE_USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+EOF
+```
 
+Deploy:
+
+```bash
+cd frontend
 vercel --prod
 ```
 
 ### Mainnet Checklist
 
-- [ ] Security audit report is ready and findings are resolved
-- [ ] Gnosis Safe multisig is configured (min 3/5)
-- [ ] AWS KMS is active and encrypted data key is tested
-- [ ] `NODE_ENV=production` — MockERC20 was not deployed ✅
+- [ ] Audit findings are resolved
+- [ ] Gnosis Safe is configured
+- [ ] Production encryption is live and tested
+- [ ] `NODE_ENV=production` used during deploy
+- [ ] `MAINNET_USDT_ADDRESS` and `MAINNET_USDC_ADDRESS` were set
 - [ ] Contract verified on BaseScan
-- [ ] Ownership transferred to Gnosis Safe ✅
-- [ ] `pause()` / `unpause()` is operational from Gnosis Safe
-- [ ] Event listener is stable on WSS RPC
-- [ ] DLQ monitor alert webhook is active (Slack/PagerDuty)
-- [ ] `GET /health` → worker: active
-- [ ] Real USDT/USDC addresses are correct on the frontend
-- [ ] SIWE domain matches the production domain
-- [ ] Rate limit tests passed
+- [ ] Ownership transferred to Gnosis Safe
+- [ ] `pause()` / `unpause()` tested from Safe
+- [ ] Worker is stable on WSS RPC
+- [ ] DLQ monitoring exists
+- [ ] `/ready` returns OK
+- [ ] Frontend uses real Base USDT/USDC addresses
+- [ ] SIWE domain and URI match production origin
+- [ ] Rate-limit and auth checks passed
 
 ---
 
@@ -501,57 +556,43 @@ vercel --prod
 | Parameter | Local | Testnet | Mainnet |
 |-----------|-------|---------|---------|
 | `NODE_ENV` | `development` | `production` | `production` |
-| `KMS_PROVIDER` | `env` | `env` *(temp)* | `aws` / `vault` |
-| `MockERC20` | ✅ Deployed | ✅ Deployed | ❌ Not Deployed |
+| `KMS_PROVIDER` | `env` | `env` *(temporary)* | `aws` / `vault` |
+| `MockERC20` | ✅ Deployed | ✅ Deployed | ❌ Not deployed |
 | `CHAIN_ID` | `31337` | `84532` | `8453` |
-| `SIWE_DOMAIN` | `localhost` | `*.fly.dev` / `*.vercel.app` | real domain |
-| Treasury | Test wallet | Test wallet | Gnosis Safe |
-| Relayer | Hardhat wallet | Separate test wallet | Gelato Automation |
-| RPC | `http://localhost:8545` | Alchemy Sepolia | Alchemy/Infura Base |
-| WSS RPC | Not Required | Recommended | **Mandatory** |
-| Audit | No | No | **Mandatory** |
+| `SIWE_DOMAIN` | `localhost:5173` | deployed frontend domain | real domain |
+| `SIWE_URI` | `http://localhost:5173` | deployed frontend URL | real production URL |
+| Treasury | test wallet | test wallet | Gnosis Safe |
+| Relayer | Hardhat wallet | separate test wallet | Gelato recommended |
+| RPC | `http://127.0.0.1:8545` | Base Sepolia RPC | Base Mainnet RPC |
+| WSS RPC | optional | recommended | strongly recommended |
+| Audit | no | no | **mandatory** |
 
-### Quick Command Reference
+### Quick Commands
 
 ```bash
-# Tests
+# Contracts test
 cd contracts && npx hardhat test
 
 # Local deploy
-npx hardhat run scripts/deploy.js --network hardhat
+cd contracts && npx hardhat run scripts/deploy.js --network localhost
 
 # Testnet deploy
-npx hardhat run scripts/deploy.js --network base-sepolia
+cd contracts && npx hardhat run scripts/deploy.js --network base-sepolia
 
 # Mainnet deploy
-NODE_ENV=production npx hardhat run scripts/deploy.js --network base
+cd contracts && NODE_ENV=production npx hardhat run scripts/deploy.js --network base
 
-# Verify (testnet)
-npx hardhat verify --network base-sepolia <ADDRESS> <TREASURY>
-
-# Fly.io backend logs
+# Backend logs
 fly logs --app araf-protocol-backend
 
-# Fly.io update secret
-fly secrets set KEY=VALUE
+# Backend health
+curl http://localhost:4000/health
+curl http://localhost:4000/ready
 
-# Vercel production deploy
+# Frontend deploy
 cd frontend && vercel --prod
 ```
 
-### Useful Links
-
-| Service | Link |
-|--------|------|
-| Base Sepolia Faucet | `faucet.quicknode.com` |
-| BaseScan Testnet | `sepolia.basescan.org` |
-| BaseScan Mainnet | `basescan.org` |
-| Alchemy | `dashboard.alchemy.com` |
-| Fly.io Dashboard | `fly.io/dashboard` |
-| Vercel Dashboard | `vercel.com/dashboard` |
-| Gnosis Safe | `app.safe.global` |
-| AWS KMS | `console.aws.amazon.com/kms` |
-
 ---
 
-*Araf Protocol — "Trust the Time, Not the Oracle."*
+*Araf Protocol — “Trust the Time, Not the Oracle.”*
