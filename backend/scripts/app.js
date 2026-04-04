@@ -11,17 +11,8 @@ const cookieParser  = require("cookie-parser");
 // [TR] Yapılandırma ve yardımcı araçlar
 // [EN] Configuration and utility helpers
 const { connectDB }    = require("./config/db");
-const { connectRedis } = require("./config/redis");
+const { connectRedis, getRedisClient } = require("./config/redis");
 const logger           = require("./utils/logger");
-
-// [TR] Ethers.js vb. kütüphane içi gizli çökmeleri sisteme yük bindirmeden dosyaya yazar
-// [EN] Catches library-internal hidden crashes without adding load to the system
-process.on("uncaughtException", (err) => {
-  logger.error("[CRITICAL-EXCEPTION] Beklenmedik Çökme (Sistem Durdu):", { message: err.message, stack: err.stack });
-});
-process.on("unhandledRejection", (reason) => {
-  logger.error("[CRITICAL-REJECTION] Yakalanmamış Promise (Sahipsiz Hata):", { reason });
-});
 
 // [TR] On-chain event'lerini MongoDB'ye yansıtan servis
 // [EN] Service that mirrors on-chain events to MongoDB
@@ -42,6 +33,12 @@ const { runReputationDecay } = require("./jobs/reputationDecay");
 // [TR] Günlük protokol istatistiklerini MongoDB'ye kaydeden periyodik görev
 // [EN] Periodic job that saves daily protocol stats to MongoDB
 const { runStatsSnapshot } = require("./jobs/statsSnapshot");
+const { runPendingListingCleanup } = require("./jobs/cleanupPendingListings");
+const { getReadiness, getLiveness } = require("./services/health");
+const {
+  runReceiptCleanup,
+  runPIISnapshotCleanup,
+} = require("./jobs/cleanupSensitiveData");
 
 // [TR] Global Express hata yakalayıcı
 // [EN] Global Express error handler
@@ -52,28 +49,31 @@ const { globalErrorHandler } = require("./middleware/errorHandler");
 const { clearMasterKeyCache } = require("./services/encryption");
 
 const app = express();
+let server = null;
+let isShuttingDown = false;
+const FATAL_EXIT_TIMEOUT_MS = 8_000;
 
-// [TR] Fly.io / Vercel proxy arkasında gerçek IP için trust proxy
-// [EN] Trust proxy for real client IP behind Fly.io / Vercel
-if (process.env.NODE_ENV === "production") {
-  app.set("trust proxy", 1);
-}
+// [TR] Proxy arkasında gerçek client IP'yi her ortamda doğru almak için koşulsuz trust proxy.
+// [EN] Unconditional trust proxy so real client IP is preserved behind reverse proxies.
+app.set("trust proxy", 1);
 
 // ─Güvenlik Middleware / Security Middleware ─
-
 app.use(helmet({
+  frameguard: false, // [EKLE] Farcaster iframe engelini (X-Frame-Options) kaldırır
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc:  ["'self'"],
       styleSrc:   ["'self'", "'unsafe-inline'"],
       imgSrc:     ["'self'", "data:", "https:"],
+      frameAncestors: ["'self'", "https://*.warpcast.com", "https://warpcast.com"], // [EKLE] İzinli iframe kaynakları
     },
   },
   hsts: process.env.NODE_ENV === "production"
     ? { maxAge: 31536000, includeSubDomains: true, preload: true }
     : false,
 }));
+
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
   .split(",")
@@ -120,6 +120,103 @@ app.use(mongoSanitize({
 //Bootstrap
 
 async function bootstrap() {
+  let dlqInterval = null;
+  let reputationDecayDelay = null;
+  let reputationDecayInterval = null;
+  let statsSnapshotDelay = null;
+  let statsSnapshotInterval = null;
+  let pendingCleanupDelay = null;
+  let pendingCleanupInterval = null;
+
+  const clearRuntimeSchedulers = () => {
+    if (dlqInterval) clearInterval(dlqInterval);
+    if (reputationDecayDelay) clearTimeout(reputationDecayDelay);
+    if (reputationDecayInterval) clearInterval(reputationDecayInterval);
+    if (statsSnapshotDelay) clearTimeout(statsSnapshotDelay);
+    if (statsSnapshotInterval) clearInterval(statsSnapshotInterval);
+    if (pendingCleanupDelay) clearTimeout(pendingCleanupDelay);
+    if (pendingCleanupInterval) clearInterval(pendingCleanupInterval);
+  };
+
+  const shutdown = async ({ signal = "UNKNOWN", exitCode = 0, reason = null }) => {
+    if (isShuttingDown) {
+      logger.warn(`[ORCHESTRATOR] Shutdown zaten devam ediyor (${signal}). İkinci tetikleme yok sayıldı.`);
+      return;
+    }
+    isShuttingDown = true;
+
+    const isFatal = exitCode !== 0;
+    if (isFatal) {
+      logger.error(`[ORCHESTRATOR] FATAL shutdown başlatıldı (${signal}). Exit code=${exitCode}; restart bekleniyor.`);
+      if (reason) {
+        logger.error("[ORCHESTRATOR] FATAL nedeni:", reason);
+      }
+    } else {
+      logger.info(`[ORCHESTRATOR] Graceful shutdown başlatıldı (${signal}). Exit code=${exitCode}; restart beklenmiyor.`);
+    }
+
+    clearMasterKeyCache();
+    clearRuntimeSchedulers();
+
+    const forceExitTimer = setTimeout(() => {
+      logger.error(`[ORCHESTRATOR] Shutdown timeout (${FATAL_EXIT_TIMEOUT_MS}ms) aşıldı. process.exit(${exitCode}) zorlanıyor.`);
+      process.exit(exitCode);
+    }, FATAL_EXIT_TIMEOUT_MS);
+
+    try {
+      if (server && server.listening) {
+        await new Promise((resolve) => server.close(resolve));
+        logger.warn("[ORCHESTRATOR] Yeni istek kabulü durduruldu (server.close).");
+      } else {
+        logger.warn("[ORCHESTRATOR] HTTP sunucusu henüz dinlemede değil; yeni istek akışı yok.");
+      }
+
+      await worker.stop();
+      logger.info("[ORCHESTRATOR] Worker stop tamamlandı.");
+
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.connection.close();
+        logger.info("[ORCHESTRATOR] MongoDB bağlantısı kapatıldı.");
+      }
+
+      try {
+        const redisClient = getRedisClient();
+        if (redisClient?.isOpen) {
+          await redisClient.quit();
+          logger.info("[ORCHESTRATOR] Redis bağlantısı kapatıldı.");
+        }
+      } catch (redisErr) {
+        logger.warn("[ORCHESTRATOR] Redis kapatma adımı atlandı/başarısız:", { message: redisErr.message });
+      }
+    } catch (shutdownErr) {
+      logger.error("[ORCHESTRATOR] Shutdown sırasında hata oluştu:", {
+        message: shutdownErr.message,
+        stack: shutdownErr.stack,
+      });
+    } finally {
+      clearTimeout(forceExitTimer);
+      logger.warn(`[ORCHESTRATOR] Shutdown tamamlandı. process.exit(${exitCode}) çağrılıyor.`);
+      process.exit(exitCode);
+    }
+  };
+
+  // [TR] Fatal process event'leri orchestration uyumlu şekilde kapatılır.
+  // [EN] Fatal process events trigger orchestrator-friendly forced exit semantics.
+  process.on("uncaughtException", (err) => {
+    shutdown({
+      signal: "uncaughtException",
+      exitCode: 1,
+      reason: { message: err.message, stack: err.stack },
+    });
+  });
+  process.on("unhandledRejection", (reason) => {
+    shutdown({
+      signal: "unhandledRejection",
+      exitCode: 1,
+      reason: { reason },
+    });
+  });
+
   try {
     // [TR] Production'da SIWE_DOMAIN localhost olamaz
     // [EN] SIWE_DOMAIN cannot be localhost in production
@@ -142,21 +239,40 @@ async function bootstrap() {
 
     // [TR] DLQ monitörü — her 60 saniyede başarısız event'leri kontrol eder
     // [EN] DLQ monitor — checks failed events every 60 seconds
-    const dlqInterval = setInterval(processDLQ, 60_000);
+    dlqInterval = setInterval(processDLQ, 60_000);
 
     // [TR] İlk çalıştırma 30 sn geciktirilir — cold start'ta DB'ye eş zamanlı yük binmesini önler
     // [EN] First run delayed by 30s — prevents simultaneous DB load on cold start
-    const reputationDecayDelay = setTimeout(() => {
+    reputationDecayDelay = setTimeout(() => {
       runReputationDecay();
       logger.info("Periyodik İtibar İyileştirme görevi zamanlandı (her 24 saatte bir).");
     }, 30_000);
-    const reputationDecayInterval = setInterval(runReputationDecay, 24 * 60 * 60 * 1000);
+    reputationDecayInterval = setInterval(runReputationDecay, 24 * 60 * 60 * 1000);
 
-    const statsSnapshotDelay = setTimeout(() => {
+    statsSnapshotDelay = setTimeout(() => {
       runStatsSnapshot();
       logger.info("Periyodik İstatistik Kaydetme görevi zamanlandı (her 24 saatte bir).");
     }, 60_000);
-    const statsSnapshotInterval = setInterval(runStatsSnapshot, 24 * 60 * 60 * 1000);
+    statsSnapshotInterval = setInterval(runStatsSnapshot, 24 * 60 * 60 * 1000);
+
+    // [TR] PENDING listing cleanup — her saat stale kayıtları temizler
+    // [EN] PENDING listing cleanup — purges stale records hourly
+    pendingCleanupDelay = setTimeout(() => {
+      runPendingListingCleanup();
+      logger.info("Periyodik PENDING listing temizlik görevi zamanlandı (her 1 saatte bir).");
+    }, 90_000);
+    pendingCleanupInterval = setInterval(runPendingListingCleanup, 60 * 60 * 1000);
+
+    // [TR] Hassas veri retention cleanup — her 30 dakikada bir
+    const sensitiveCleanupDelay = setTimeout(async () => {
+      await runReceiptCleanup();
+      await runPIISnapshotCleanup();
+      logger.info("Receipt/PII retention cleanup görevi zamanlandı (her 30 dakikada bir).");
+    }, 120_000);
+    const sensitiveCleanupInterval = setInterval(async () => {
+      await runReceiptCleanup();
+      await runPIISnapshotCleanup();
+    }, 30 * 60 * 1000);
 
     // [TR] Rotalar DB ve Redis hazır olduktan sonra yüklenir
     // [EN] Routes loaded after DB and Redis are ready
@@ -183,44 +299,27 @@ async function bootstrap() {
     app.use("/api/stats",    statsRoutes);
     app.use("/api/receipts", receiptRoutes);
 
-    app.get("/health", (req, res) => res.json({
-      status:    "ok",
-      worker:    "active",
-      timestamp: new Date().toISOString(),
-    }));
+    app.get("/health", (req, res) => res.json(getLiveness()));
+    app.get("/ready", async (req, res) => {
+      const readiness = await getReadiness({ worker, provider: worker.provider });
+      return res.status(readiness.ok ? 200 : 503).json(readiness);
+    });
 
     app.use((req, res) => res.status(404).json({ error: "İstenen endpoint bulunamadı" }));
 
     app.use(globalErrorHandler);
 
-    const PORT   = process.env.PORT || 4000;
-    const server = app.listen(PORT, () => {
+    const PORT = process.env.PORT || 4000;
+    server = app.listen(PORT, () => {
       logger.info(`===========================================================`);
       logger.info(`🚀 Araf Protocol Backend Dinleniyor: Port ${PORT}`);
       logger.info(`🌍 Ortam: ${process.env.NODE_ENV || 'development'}`);
-      logger.warn(`🛡️  Güvenlik: Zero Private Key Modu Aktif.`);
+      logger.info(`🛡️  Güvenlik: Non-custodial backend (opsiyonel automation signer olabilir).`);
       logger.info(`===========================================================`);
     });
 
-    // [TR] Graceful shutdown — clearMasterKeyCache ile plaintext key bellekten sıfırlanır.
-    const shutdown = async (signal) => {
-      logger.info(`${signal} alındı. Graceful shutdown başlıyor...`);
-      clearMasterKeyCache();
-      clearInterval(dlqInterval);
-      clearTimeout(reputationDecayDelay);
-      clearInterval(reputationDecayInterval);
-      clearTimeout(statsSnapshotDelay);
-      clearInterval(statsSnapshotInterval);
-      server.close(async () => {
-        await worker.stop();
-        await mongoose.connection.close();
-        logger.info("Tüm bağlantılar kapatıldı. Çıkış yapılıyor.");
-        process.exit(0);
-      });
-    };
-
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT",  () => shutdown("SIGINT"));
+    process.on("SIGTERM", () => shutdown({ signal: "SIGTERM", exitCode: 0 }));
+    process.on("SIGINT",  () => shutdown({ signal: "SIGINT", exitCode: 0 }));
 
   } catch (err) {
     logger.error("Uygulama başlatılırken kritik hata oluştu:", err);
