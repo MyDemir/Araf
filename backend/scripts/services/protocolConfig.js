@@ -17,9 +17,9 @@
  *   getConfig() çağıran endpoint'ler CONFIG_UNAVAILABLE hatası alır ve 503 döner.
  *   Bu, geliştirici hatalarını erkenden yakalar ve "hayalet config" riskini önler.
  *
- * Fix: Redis cache TTL ortama göre ayarlandı.
- *   Production: 7 gün (bond değerleri nadiren değişir)
- *   Development/Testnet: 1 saat (sık deploy döngüsü için)
+ * Fix: Redis cache TTL kısaltıldı (zombi cache riskini azaltmak için).
+ *   Varsayılan: 1 saat
+ *   Override: CONFIG_CACHE_TTL_SECONDS ile ortam bazlı yükseltilebilir.
  */
 
 const { ethers } = require("ethers");
@@ -28,10 +28,9 @@ const { getRedisClient } = require("../config/redis");
 
 const CONFIG_CACHE_KEY = "cache:protocol_config:v1";
 
-// Ortama göre cache TTL
-const CONFIG_CACHE_TTL = process.env.NODE_ENV === "production"
-  ? 7 * 24 * 3600  // Production: 7 gün
-  : 3600;          // Development/Testnet: 1 saat
+// [TR] Varsayılan 1 saat — zombi cache riskini azaltır.
+// [EN] Default 1 hour to reduce zombie-cache risk.
+const CONFIG_CACHE_TTL = Number(process.env.CONFIG_CACHE_TTL_SECONDS || 3600);
 
 // Sadece public constant'ları okumak için minimal ABI
 const CONFIG_ABI = [
