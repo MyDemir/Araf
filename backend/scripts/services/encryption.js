@@ -35,6 +35,17 @@ const hkdfAsync = promisify(crypto.hkdf);
 // Uygulama restart'ında otomatik temizlenir.
 let _masterKeyCache = null;
 
+function _normalizeWalletAddress(walletAddress) {
+  if (typeof walletAddress !== "string") {
+    throw new Error("walletAddress must be a string");
+  }
+  const normalized = walletAddress.trim().toLowerCase();
+  if (!/^0x[a-f0-9]{40}$/.test(normalized)) {
+    throw new Error("Invalid walletAddress format");
+  }
+  return normalized;
+}
+
 /**
  *
  * Production'da master key'in .env'de plaintext durmaması için
@@ -174,11 +185,32 @@ async function _getMasterKey() {
 async function _deriveDataKey(walletAddress) {
   // SEC-01 Fix: _getMasterKey artık async — KMS çağrıları için await gerekli
   const masterKey = await _getMasterKey();
-  const salt      = Buffer.alloc(32, 0); // deterministic salt (wallet adresi info'da)
-  const info      = Buffer.from(`araf-pii-${walletAddress.toLowerCase()}`);
+  const normalizedWallet = _normalizeWalletAddress(walletAddress);
+  // ORTA-10 Fix: Statik zero-salt yerine cüzdan-bağımlı deterministik salt.
+  const salt = crypto
+    .createHash("sha256")
+    .update(`araf-pii-salt-v1:${normalizedWallet}`)
+    .digest();
+  const info = Buffer.from("araf-pii-dek-v1");
 
   const dek = await hkdfAsync("sha256", masterKey, salt, info, KEY_LENGTH);
   return Buffer.from(dek);
+}
+
+/**
+ * DEK'i kısa süreli kullanır ve işlem bitince bellekten sıfırlar.
+ * @template T
+ * @param {string} walletAddress
+ * @param {(dek: Buffer) => Promise<T>} operation
+ * @returns {Promise<T>}
+ */
+async function _withDataKey(walletAddress, operation) {
+  const dek = await _deriveDataKey(walletAddress);
+  try {
+    return await operation(dek);
+  } finally {
+    dek.fill(0);
+  }
 }
 
 /**
@@ -189,15 +221,17 @@ async function _deriveDataKey(walletAddress) {
  * @returns {Promise<string>}    - Hex-encoded: iv + authTag + ciphertext
  */
 async function encryptField(plaintext, walletAddress) {
-  const dek = await _deriveDataKey(walletAddress);
-  const iv  = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, dek, iv);
+  const normalizedWallet = _normalizeWalletAddress(walletAddress);
+  return _withDataKey(normalizedWallet, async (dek) => {
+    const iv  = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ALGORITHM, dek, iv);
 
-  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  const tag       = cipher.getAuthTag();
+    const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    const tag       = cipher.getAuthTag();
 
-  // Format: iv (12) + authTag (16) + ciphertext
-  return Buffer.concat([iv, tag, encrypted]).toString("hex");
+    // Format: iv (12) + authTag (16) + ciphertext
+    return Buffer.concat([iv, tag, encrypted]).toString("hex");
+  });
 }
 
 /**
@@ -208,17 +242,22 @@ async function encryptField(plaintext, walletAddress) {
  * @returns {Promise<string>}    - Original plaintext
  */
 async function decryptField(cipherHex, walletAddress) {
-  const dek  = await _deriveDataKey(walletAddress);
-  const data = Buffer.from(cipherHex, "hex");
+  const normalizedWallet = _normalizeWalletAddress(walletAddress);
+  return _withDataKey(normalizedWallet, async (dek) => {
+    const data = Buffer.from(cipherHex, "hex");
+    if (data.length < IV_LENGTH + TAG_LENGTH + 1) {
+      throw new Error("Invalid ciphertext format");
+    }
 
-  const iv         = data.slice(0, IV_LENGTH);
-  const tag        = data.slice(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-  const ciphertext = data.slice(IV_LENGTH + TAG_LENGTH);
+    const iv         = data.slice(0, IV_LENGTH);
+    const tag        = data.slice(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
+    const ciphertext = data.slice(IV_LENGTH + TAG_LENGTH);
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, dek, iv);
-  decipher.setAuthTag(tag);
+    const decipher = crypto.createDecipheriv(ALGORITHM, dek, iv);
+    decipher.setAuthTag(tag);
 
-  return decipher.update(ciphertext) + decipher.final("utf8");
+    return decipher.update(ciphertext) + decipher.final("utf8");
+  });
 }
 
 /**
@@ -229,7 +268,7 @@ async function decryptField(cipherHex, walletAddress) {
  * @returns {Promise<{ bankOwner_enc: string, iban_enc: string, telegram_enc: string|null }>}
  */
 async function encryptPII(rawPII, walletAddress) {
-  const addr = walletAddress.toLowerCase();
+  const addr = _normalizeWalletAddress(walletAddress);
   return {
     bankOwner_enc: rawPII.bankOwner ? await encryptField(rawPII.bankOwner, addr) : null,
     iban_enc:      rawPII.iban      ? await encryptField(rawPII.iban,      addr) : null,
@@ -245,7 +284,7 @@ async function encryptPII(rawPII, walletAddress) {
  * @returns {Promise<{ bankOwner: string, iban: string, telegram: string|null }>}
  */
 async function decryptPII(encPII, walletAddress) {
-  const addr = walletAddress.toLowerCase();
+  const addr = _normalizeWalletAddress(walletAddress);
   return {
     bankOwner: encPII.bankOwner_enc ? await decryptField(encPII.bankOwner_enc, addr) : null,
     iban:      encPII.iban_enc      ? await decryptField(encPII.iban_enc,      addr) : null,
