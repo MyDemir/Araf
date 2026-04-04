@@ -2,25 +2,37 @@
 
 /**
  * Listings Route — Pazar Yeri CRUD
- **/
+ *
+ * YÜKS-20 Fix: Kararsız Sayfalama Düzeltildi.
+ *   ÖNCEKİ: .sort({ exchange_rate: 1 }) — aynı kura sahip ilanlar için
+ *   MongoDB sıralama sırasını garanti etmiyordu. Sayfa geçişlerinde
+ *   bazı ilanlar iki kez, bazıları hiç görünmüyordu.
+ *   ŞİMDİ: .sort({ exchange_rate: 1, _id: 1 }) — _id deterministik sıra sağlar.
+ *
+ * BACK-02 Fix: RPC Hatasında Tier 0 Mahkumiyeti Düzeltildi.
+ *   ÖNCEKİ: _getOnChainEffectiveTier hata verince return 0 (Tier 0 fallback).
+ *   Anlık RPC dalgalanmasında Tier 4 kullanıcı Tier 0 muamelesi görüyordu.
+ *   ŞİMDİ: Hata durumunda null döner → ilan açma reddedilir + açıklayıcı mesaj.
+ *   "Güvenli varsayılan = en kısıtlayıcı değer" mantığı yerine
+ *   "Doğrulanamıyorsa işlem yapma" mantığı uygulandı.
+ */
 
 const express = require("express");
 const Joi     = require("joi");
 const router  = express.Router();
 
-const { requireAuth }                                = require("../middleware/auth");
-const { listingsReadLimiter, listingsWriteLimiter }  = require("../middleware/rateLimiter");
-const { Listing, Trade }                             = require("../models/Trade");
-const logger                                         = require("../utils/logger");
-const { getConfig }                                  = require("../services/protocolConfig");
+const { requireAuth, requireSessionWalletMatch }    = require("../middleware/auth");
+const { listingsReadLimiter, listingsWriteLimiter } = require("../middleware/rateLimiter");
+const { Listing, Trade }                            = require("../models/Trade");
+const logger                                        = require("../utils/logger");
+const { getConfig }                                 = require("../services/protocolConfig");
 
-// On-chain tier doğrulama için ethers ve kontrat ABI
 const { ethers } = require("ethers");
 const REPUTATION_ABI = [
   "function getReputation(address _wallet) view returns (uint256 successful, uint256 failed, uint256 bannedUntil, uint256 consecutiveBans, uint8 effectiveTier)",
 ];
 
-// RPC Provider Cache Mekanizması
+// [TR] RPC Provider önbelleği — her istek için yeniden oluşturmayı önler
 let _cachedListingsProvider = null;
 function _getListingsProvider() {
   if (!_cachedListingsProvider) {
@@ -29,32 +41,43 @@ function _getListingsProvider() {
   return _cachedListingsProvider;
 }
 
+function _buildListingRef(listingId) {
+  return ethers.keccak256(ethers.toUtf8Bytes(`listing:${listingId}`));
+}
+
 /**
  * Kullanıcının on-chain efektif tier'ını sorgular.
- * Kontrat view fonksiyonu çağrısı — gas ücreti yok.
+ *
+ * BACK-02 Fix: Hata durumunda null döner (eski: return 0).
+ * Çağıran kod null durumunu ele alarak kullanıcıyı bilgilendirmeli.
+ *
+ * @returns {Promise<number|null>} Tier (0-4) veya null (doğrulanamadı)
  */
 async function _getOnChainEffectiveTier(walletAddress) {
   const contractAddress = process.env.ARAF_ESCROW_ADDRESS;
 
-  if (!process.env.BASE_RPC_URL || !contractAddress || contractAddress === "0x0000000000000000000000000000000000000000") {
-    // Development'ta kontrat yoksa → tier kontrolü atla, 4 (en yüksek) döndür
-    logger.warn("[Listings] On-chain tier kontrolü atlanıyor — kontrat adresi tanımsız (development).");
+  if (!process.env.BASE_RPC_URL || !contractAddress ||
+      contractAddress === "0x0000000000000000000000000000000000000000") {
+    // [TR] Development'ta kontrat yoksa tier kontrolü atla
+    logger.warn("[Listings] On-chain tier kontrolü atlanıyor (development).");
     return 4;
   }
 
   try {
-    const provider = _getListingsProvider(); // Cache kullanılıyor
+    const provider = _getListingsProvider();
     const contract = new ethers.Contract(contractAddress, REPUTATION_ABI, provider);
     const rep = await contract.getReputation(walletAddress);
     return Number(rep.effectiveTier);
   } catch (err) {
-    logger.error(`[Listings] On-chain tier sorgusu başarısız: ${err.message}. Güvenli varsayılan (0) kullanılıyor.`);
-    return 0; // Hata durumunda en kısıtlayıcı değeri döndür — güvenlik öncelikli
+    // BACK-02 Fix: Hata durumunda null — "doğrulanamadı" sinyali
+    // ÖNCEKİ: return 0 → Tier 4 kullanıcı Tier 0 gibi işleniyordu
+    logger.error(`[Listings] On-chain tier sorgusu başarısız: ${err.message}`);
+    return null;
   }
 }
 
 // ─── GET /api/listings/config ─────────────────────────────────────────────────
-// Frontend bond oranlarını buradan okur.
+// [TR] Frontend bond oranlarını buradan okur (felsefe uyumu — hardcode değil)
 router.get("/config", async (req, res, next) => {
   try {
     const config = getConfig();
@@ -82,16 +105,17 @@ router.get("/", listingsReadLimiter, async (req, res, next) => {
     if (error) return res.status(400).json({ error: error.message });
 
     const filter = { status: "OPEN" };
-    if (value.fiat)   filter.fiat_currency = value.fiat;
+    if (value.fiat)             filter.fiat_currency = value.fiat;
     if (value.tier !== undefined) filter["tier_rules.required_tier"] = value.tier;
     if (value.amount) {
       filter["limits.min"] = { $lte: value.amount };
       filter["limits.max"] = { $gte: value.amount };
     }
 
-    const skip     = (value.page - 1) * value.limit;
+    const skip = (value.page - 1) * value.limit;
     const listings = await Listing.find(filter)
-      .sort({ exchange_rate: 1 })
+      // YÜKS-20 Fix: _id deterministik sıra — eşit kurda sayfalama tutarlı
+      .sort({ exchange_rate: 1, _id: 1 })
       .skip(skip)
       .limit(value.limit)
       .lean();
@@ -102,7 +126,7 @@ router.get("/", listingsReadLimiter, async (req, res, next) => {
 });
 
 // ─── POST /api/listings ───────────────────────────────────────────────────────
-router.post("/", requireAuth, listingsWriteLimiter, async (req, res, next) => {
+router.post("/", requireAuth, requireSessionWalletMatch, listingsWriteLimiter, async (req, res, next) => {
   try {
     const schema = Joi.object({
       crypto_asset:      Joi.string().valid("USDT", "USDC").required(),
@@ -120,28 +144,24 @@ router.post("/", requireAuth, listingsWriteLimiter, async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.message });
 
+    // [TR] min > max kontrolü
     if (value.limits.max <= value.limits.min) {
-      return res.status(400).json({ error: "limits.max, limits.min'den büyük olmalı" });
+      return res.status(400).json({ error: "limits.max, limits.min'den büyük olmalı." });
     }
 
-    // Tier başına kripto limiti backend'de de kontrol ediliyor.
-    // Kaynak: ArafEscrow.sol sabitleri (TIER_MAX_AMOUNT_TIER0..3)
-    // NOT: limits.max fiat cinsinden gelir (örn: 49500 TRY)
-    // exchange_rate = 1 USDT karşılığı fiat tutarı. limits.max / exchange_rate = max USDT.
-    const TIER_MAX_CRYPTO = { 0: 150, 1: 1500, 2: 7500, 3: 30000 };
-    const tierMax = TIER_MAX_CRYPTO[value.tier];
-    if (tierMax !== undefined) {
-      const cryptoEquivalent = value.limits.max / value.exchange_rate;
-      if (cryptoEquivalent > tierMax) {
-        return res.status(400).json({
-          error: `Tier ${value.tier} için maksimum kripto limiti ${tierMax} USDT/USDC. ` +
-                 `Max limit kripto karşılığı: ${cryptoEquivalent.toFixed(2)}`,
-        });
-      }
-    }
+    // [TR] Tier başına nihai tutar kontrolü sadece kontratta authoritative olarak uygulanır.
+    // [EN] Tier max-amount enforcement is authoritative on-chain only.
 
-    //  Kontratın view fonksiyonuyla kullanıcının efektif tier'ını doğrula.
+    // BACK-02 Fix: Tier doğrulaması — null = RPC hatası → ret
     const effectiveTier = await _getOnChainEffectiveTier(req.wallet);
+
+    if (effectiveTier === null) {
+      // [TR] RPC hatası — kullanıcıyı bilgilendir, Tier 0 muamelesi YAPMA
+      return res.status(503).json({
+        error: "İtibar veriniz şu an doğrulanamıyor. Lütfen birkaç dakika sonra tekrar deneyin.",
+      });
+    }
+
     if (value.tier > effectiveTier) {
       logger.warn(`[Listings] Tier reddedildi: wallet=${req.wallet} istenen=${value.tier} efektif=${effectiveTier}`);
       return res.status(403).json({
@@ -150,9 +170,9 @@ router.post("/", requireAuth, listingsWriteLimiter, async (req, res, next) => {
     }
 
     const config = getConfig();
-    const bonds = config.bondMap[value.tier];
+    const bonds  = config.bondMap[value.tier];
 
-    const listing = await Listing.create({
+    const listing = new Listing({
       maker_address:     req.wallet,
       crypto_asset:      value.crypto_asset,
       fiat_currency:     value.fiat_currency,
@@ -163,9 +183,15 @@ router.post("/", requireAuth, listingsWriteLimiter, async (req, res, next) => {
         maker_bond_pct: bonds.maker,
         taker_bond_pct: bonds.taker,
       },
+      // [TR] Chain-first felsefe: ilan önce PENDING oluşturulur.
+      //      Event listener EscrowCreated yakaladığında OPEN'a çeker.
+      // [EN] Chain-first: listing starts as PENDING and becomes OPEN on EscrowCreated.
+      status:            "PENDING",
       token_address:     value.token_address,
       onchain_escrow_id: value.onchain_escrow_id || null,
     });
+    listing.listing_ref = _buildListingRef(listing._id.toString()).toLowerCase();
+    await listing.save();
 
     logger.info(`[Listings] Yeni ilan: maker=${req.wallet} tier=${value.tier} asset=${value.crypto_asset}`);
     return res.status(201).json({ listing });
@@ -173,30 +199,32 @@ router.post("/", requireAuth, listingsWriteLimiter, async (req, res, next) => {
 });
 
 // ─── DELETE /api/listings/:id ─────────────────────────────────────────────────
-router.delete("/:id", requireAuth, async (req, res, next) => {
+router.delete("/:id", requireAuth, requireSessionWalletMatch, async (req, res, next) => {
   try {
     if (!/^[a-fA-F0-9]{24}$/.test(req.params.id)) {
-      return res.status(400).json({ error: "Geçersiz ilan ID formatı" });
+      return res.status(400).json({ error: "Geçersiz ilan ID formatı." });
     }
 
     const listing = await Listing.findById(req.params.id);
-    if (!listing) return res.status(404).json({ error: "İlan bulunamadı" });
+    if (!listing) return res.status(404).json({ error: "İlan bulunamadı." });
 
     if (listing.maker_address !== req.wallet) {
       logger.warn(`[Listings] Yetkisiz silme: caller=${req.wallet} maker=${listing.maker_address}`);
-      return res.status(403).json({ error: "Bu ilan sana ait değil" });
+      return res.status(403).json({ error: "Bu ilan sana ait değil." });
+    }
+
+    if (listing.status === "DELETED") {
+      return res.status(409).json({ error: "İlan zaten silinmiş." });
     }
 
     if (listing.onchain_escrow_id) {
       const activeTrade = await Trade.findOne({ onchain_escrow_id: listing.onchain_escrow_id });
       if (activeTrade && activeTrade.status !== "OPEN") {
-        logger.warn(`[Listings] Aktif işlem varken silme engellendi: id=${req.params.id} trade_status=${activeTrade.status}`);
-        return res.status(409).json({ error: "Bu ilana bağlı aktif bir işlem varken ilan silinemez." });
+        logger.warn(`[Listings] Aktif işlem varken silme engellendi: id=${req.params.id}`);
+        return res.status(409).json({
+          error: "Bu ilana bağlı aktif bir işlem varken ilan silinemez.",
+        });
       }
-    }
-
-    if (listing.status === "DELETED") {
-      return res.status(409).json({ error: "İlan zaten silinmiş" });
     }
 
     listing.status = "DELETED";
