@@ -1,17 +1,56 @@
 /**
- * ArafEscrow Deploy Script (Güncellenmiş Testnet + Mainnet Güvenli Sürüm)
+ * ArafEscrow Deploy Script (Network-Aware Testnet + Mainnet Safe Sürüm)
  *
  * Deploy sonrası token support doğrulaması zincir üstünde teyit edilir.
  * Ownership, yalnızca tüm desteklenen tokenlar başarıyla aktif ve doğrulanmışsa devredilir.
- * Production ortamında gerçek token adresleri ENV'den zorunlu alınır; eksikse script hard fail olur.
+ * Network seçimi NODE_ENV ile değil, gerçek Hardhat network adı ve chainId ile yapılır.
  *
- * Kullanım: npx hardhat run scripts/deploy.js --network localhost
+ * Kullanım:
+ *   npx hardhat run scripts/deploy.js --network localhost
+ *   npx hardhat run scripts/deploy.js --network base-sepolia
+ *   npx hardhat run scripts/deploy.js --network base
  */
-const { ethers } = require("hardhat");
+const hre = require("hardhat");
+const { ethers } = hre;
 const fs = require("fs");
 const path = require("path");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+const NETWORK_CONFIG = {
+  hardhat: {
+    displayName: "Hardhat Local",
+    expectedChainId: 31337,
+    tokenStrategy: "mock",
+    autoWriteFrontendEnv: true,
+    frontendAllowedChainId: 31337,
+  },
+  localhost: {
+    displayName: "Localhost",
+    expectedChainId: 31337,
+    tokenStrategy: "mock",
+    autoWriteFrontendEnv: true,
+    frontendAllowedChainId: 31337,
+  },
+  "base-sepolia": {
+    displayName: "Base Sepolia",
+    expectedChainId: 84532,
+    tokenStrategy: "env",
+    usdtEnv: "BASE_SEPOLIA_USDT_ADDRESS",
+    usdcEnv: "BASE_SEPOLIA_USDC_ADDRESS",
+    autoWriteFrontendEnv: true,
+    frontendAllowedChainId: 84532,
+  },
+  base: {
+    displayName: "Base Mainnet",
+    expectedChainId: 8453,
+    tokenStrategy: "env",
+    usdtEnv: "MAINNET_USDT_ADDRESS",
+    usdcEnv: "MAINNET_USDC_ADDRESS",
+    autoWriteFrontendEnv: false,
+    frontendAllowedChainId: 8453,
+  },
+};
 
 function requireEnvAddress(name) {
   const value = process.env[name];
@@ -21,22 +60,36 @@ function requireEnvAddress(name) {
   return ethers.getAddress(value);
 }
 
-function resolveProductionTokenConfig() {
-  const isProduction = process.env.NODE_ENV === "production";
-
-  if (!isProduction) {
-    return {
-      isProduction,
-      usdtAddress: null,
-      usdcAddress: null,
-    };
+function resolveDeploymentConfig(networkName) {
+  const config = NETWORK_CONFIG[networkName];
+  if (!config) {
+    throw new Error(
+      `❌ Desteklenmeyen network: ${networkName}. Desteklenenler: ${Object.keys(NETWORK_CONFIG).join(", ")}`
+    );
   }
+  return { networkName, ...config };
+}
 
-  return {
-    isProduction,
-    usdtAddress: requireEnvAddress("MAINNET_USDT_ADDRESS"),
-    usdcAddress: requireEnvAddress("MAINNET_USDC_ADDRESS"),
-  };
+async function assertExpectedNetwork(config) {
+  const providerNetwork = await ethers.provider.getNetwork();
+  const actualChainId = Number(providerNetwork.chainId);
+
+  if (actualChainId !== config.expectedChainId) {
+    throw new Error(
+      `❌ Network güvenlik kontrolü başarısız. Script '${config.networkName}' bekliyordu ` +
+      `(chainId=${config.expectedChainId}), provider ise chainId=${actualChainId} döndürdü.`
+    );
+  }
+}
+
+function upsertEnvLine(content, key, value) {
+  const line = `${key}=${value}`;
+  const pattern = new RegExp(`^${key}=.*$`, "m");
+  if (pattern.test(content)) {
+    return content.replace(pattern, line);
+  }
+  const needsTrailingNewline = content.length > 0 && !content.endsWith("\n");
+  return `${content}${needsTrailingNewline ? "\n" : ""}${line}\n`;
 }
 
 async function enableAndVerifySupportedToken(escrow, tokenAddress, symbol) {
@@ -52,13 +105,73 @@ async function enableAndVerifySupportedToken(escrow, tokenAddress, symbol) {
   return { symbol, address: tokenAddress, isSupported };
 }
 
+async function resolveTokenConfig(config) {
+  if (config.tokenStrategy === "mock") {
+    console.log("\n⏳ MockERC20 (USDT ve USDC) deploy ediliyor...");
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+
+    const usdt = await MockERC20.deploy("Mock USDT", "USDT", 6);
+    await usdt.waitForDeployment();
+    const usdtAddress = await usdt.getAddress();
+    console.log("✅ MockUSDT deploy edildi:", usdtAddress);
+
+    const usdc = await MockERC20.deploy("Mock USDC", "USDC", 6);
+    await usdc.waitForDeployment();
+    const usdcAddress = await usdc.getAddress();
+    console.log("✅ MockUSDC deploy edildi:", usdcAddress);
+
+    return { usdtAddress, usdcAddress };
+  }
+
+  const usdtAddress = requireEnvAddress(config.usdtEnv);
+  const usdcAddress = requireEnvAddress(config.usdcEnv);
+
+  console.log(`\n⏳ ${config.displayName} token adresleri ENV'den alındı...`);
+  console.log(`✅ ${config.usdtEnv}:`, usdtAddress);
+  console.log(`✅ ${config.usdcEnv}:`, usdcAddress);
+
+  return { usdtAddress, usdcAddress };
+}
+
+function syncFrontendEnv({ escrowAddress, usdtAddress, usdcAddress, allowedChainId }) {
+  const frontendEnvPath = path.resolve(__dirname, "../../frontend/.env");
+  const exampleEnvPath = path.resolve(__dirname, "../../frontend/.env.example");
+
+  if (!fs.existsSync(frontendEnvPath) && fs.existsSync(exampleEnvPath)) {
+    fs.copyFileSync(exampleEnvPath, frontendEnvPath);
+    console.log("📝 .env.example'dan yeni frontend/.env oluşturuldu.");
+  }
+
+  if (!fs.existsSync(frontendEnvPath)) {
+    console.log("ℹ️ frontend/.env bulunamadı; auto-write atlandı.");
+    return;
+  }
+
+  let envContent = fs.readFileSync(frontendEnvPath, "utf8");
+
+  const codespaceName = process.env.CODESPACE_NAME;
+  if (codespaceName) {
+    const apiUrl = `https://${codespaceName}-4000.app.github.dev`;
+    envContent = upsertEnvLine(envContent, "VITE_API_URL", apiUrl);
+  }
+
+  envContent = upsertEnvLine(envContent, "VITE_ESCROW_ADDRESS", escrowAddress);
+  envContent = upsertEnvLine(envContent, "VITE_USDT_ADDRESS", usdtAddress);
+  envContent = upsertEnvLine(envContent, "VITE_USDC_ADDRESS", usdcAddress);
+  envContent = upsertEnvLine(envContent, "VITE_ALLOWED_CHAIN_ID", String(allowedChainId));
+
+  fs.writeFileSync(frontendEnvPath, envContent);
+  console.log("✅ frontend/.env dosyası deploy çıktısına göre güncellendi.");
+}
+
 async function main() {
-  const { isProduction, usdtAddress: productionUsdt, usdcAddress: productionUsdc } =
-    resolveProductionTokenConfig();
+  const config = resolveDeploymentConfig(hre.network.name);
+  await assertExpectedNetwork(config);
 
   const [deployer] = await ethers.getSigners();
   console.log("🚀 Deploy eden cüzdan:", deployer.address);
-  console.log("🌍 Ortam:", isProduction ? "production" : "non-production");
+  console.log("🌍 Network:", config.displayName, `(${config.networkName})`);
+  console.log("🔗 Beklenen chainId:", config.expectedChainId);
 
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log("💰 Bakiye:", ethers.formatEther(balance), "ETH\n");
@@ -91,28 +204,8 @@ async function main() {
   }
 
   // ── 2. Supported Token Kurulumu (Ownership devrinden ÖNCE) ───────────────
-  let usdtAddress = productionUsdt || "";
-  let usdcAddress = productionUsdc || "";
+  const { usdtAddress, usdcAddress } = await resolveTokenConfig(config);
   const tokenSupportChecks = [];
-
-  if (isProduction) {
-    console.log("\n⏳ Production token adresleri merkezi config guard ile alındı...");
-    console.log("✅ MAINNET_USDT_ADDRESS:", usdtAddress);
-    console.log("✅ MAINNET_USDC_ADDRESS:", usdcAddress);
-  } else {
-    console.log("\n⏳ MockERC20 (USDT ve USDC) deploy ediliyor...");
-    const MockERC20 = await ethers.getContractFactory("MockERC20");
-
-    const usdt = await MockERC20.deploy("Mock USDT", "USDT", 6);
-    await usdt.waitForDeployment();
-    usdtAddress = await usdt.getAddress();
-    console.log("✅ MockUSDT deploy edildi:", usdtAddress);
-
-    const usdc = await MockERC20.deploy("Mock USDC", "USDC", 6);
-    await usdc.waitForDeployment();
-    usdcAddress = await usdc.getAddress();
-    console.log("✅ MockUSDC deploy edildi:", usdcAddress);
-  }
 
   tokenSupportChecks.push(await enableAndVerifySupportedToken(escrow, usdtAddress, "USDT"));
   tokenSupportChecks.push(await enableAndVerifySupportedToken(escrow, usdcAddress, "USDC"));
@@ -128,34 +221,16 @@ async function main() {
   await tx.wait();
   console.log("✅ Ownership başarıyla devredildi!");
 
-  // ── 4. FE .env Auto-write (Production'da KAPALI) ──────────────────────────
-  if (!isProduction) {
-    const frontendEnvPath = path.resolve(__dirname, "../../frontend/.env");
-    const exampleEnvPath = path.resolve(__dirname, "../../frontend/.env.example");
-
-    if (!fs.existsSync(frontendEnvPath) && fs.existsSync(exampleEnvPath)) {
-      fs.copyFileSync(exampleEnvPath, frontendEnvPath);
-      console.log("📝 .env.example'dan yeni .env oluşturuldu.");
-    }
-
-    if (fs.existsSync(frontendEnvPath)) {
-      let envContent = fs.readFileSync(frontendEnvPath, "utf8");
-
-      const codespaceName = process.env.CODESPACE_NAME;
-      if (codespaceName) {
-        const apiUrl = `https://${codespaceName}-4000.app.github.dev`;
-        envContent = envContent.replace(/VITE_API_URL=.*/, `VITE_API_URL=${apiUrl}`);
-      }
-
-      envContent = envContent.replace(/VITE_ESCROW_ADDRESS=.*/, `VITE_ESCROW_ADDRESS=\"${address}\"`);
-      envContent = envContent.replace(/VITE_USDT_ADDRESS=.*/, `VITE_USDT_ADDRESS=\"${usdtAddress}\"`);
-      envContent = envContent.replace(/VITE_USDC_ADDRESS=.*/, `VITE_USDC_ADDRESS=\"${usdcAddress}\"`);
-
-      fs.writeFileSync(frontendEnvPath, envContent);
-      console.log("✅ .env dosyası otomatik olarak güncellendi (non-production). ");
-    }
+  // ── 4. FE .env Auto-write ─────────────────────────────────────────────────
+  if (config.autoWriteFrontendEnv) {
+    syncFrontendEnv({
+      escrowAddress: address,
+      usdtAddress,
+      usdcAddress,
+      allowedChainId: config.frontendAllowedChainId,
+    });
   } else {
-    console.log("ℹ️ Production modunda frontend/.env auto-write atlandı.");
+    console.log(`ℹ️ ${config.displayName} için frontend/.env auto-write atlandı.`);
   }
 
   // ── 5. Sonuçlar ve completion koşulu ──────────────────────────────────────
@@ -165,9 +240,10 @@ async function main() {
 
   console.log("\n🎉 DEPLOYMENT COMPLETE (token support zincir üstünde doğrulandı) 🎉");
   console.log("--------------------------------------------------");
-  console.log(`VITE_ESCROW_ADDRESS=\"${address}\"`);
-  console.log(`VITE_USDT_ADDRESS=\"${usdtAddress}\"`);
-  console.log(`VITE_USDC_ADDRESS=\"${usdcAddress}\"`);
+  console.log(`VITE_ESCROW_ADDRESS=${address}`);
+  console.log(`VITE_USDT_ADDRESS=${usdtAddress}`);
+  console.log(`VITE_USDC_ADDRESS=${usdcAddress}`);
+  console.log(`VITE_ALLOWED_CHAIN_ID=${config.frontendAllowedChainId}`);
   console.log("--------------------------------------------------");
 }
 
@@ -180,4 +256,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { resolveProductionTokenConfig };
+module.exports = { resolveDeploymentConfig };
