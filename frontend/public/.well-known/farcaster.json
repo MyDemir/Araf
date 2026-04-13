@@ -12,7 +12,6 @@
     "imageUrl": "https://app.araf.xyz/og-image.png",
     "buttonTitle": "Araf'ı Başlat",
     "splashImageUrl": "https://app.araf.xyz/splash.png",
-    "splashBackgroundColor": "#060608",
-    "webhookUrl": "https://araf-protocol-backend.fly.dev/api/webhook"
+    "splashBackgroundColor": "#060608"
   }
 }
