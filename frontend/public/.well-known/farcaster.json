@@ -1,17 +1,27 @@
 {
   "accountAssociation": {
-    "header": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9",
-    "payload": "eyJkb21haW4iOiJhcHAuYXJhZi54eXoifQ",
-    "signature": "IMZA_BURAYA_GELECEK"
+    "header": "REPLACE_WITH_FARCASTER_ACCOUNT_ASSOCIATION_HEADER",
+    "payload": "REPLACE_WITH_FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD",
+    "signature": "REPLACE_WITH_SIGNED_FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE"
   },
   "frame": {
     "version": "1",
     "name": "Araf Protocol",
-    "iconUrl": "https://app.araf.xyz/icon.png",
+    "iconUrl": "https://app.araf.xyz/icon.svg",
     "homeUrl": "https://app.araf.xyz",
-    "imageUrl": "https://app.araf.xyz/og-image.png",
+    "imageUrl": "https://app.araf.xyz/og-image.svg",
     "buttonTitle": "Araf'ı Başlat",
-    "splashImageUrl": "https://app.araf.xyz/splash.png",
+    "splashImageUrl": "https://app.araf.xyz/splash.svg",
+    "splashBackgroundColor": "#060608"
+  },
+  "miniapp": {
+    "version": "1",
+    "name": "Araf Protocol",
+    "iconUrl": "https://app.araf.xyz/icon.svg",
+    "homeUrl": "https://app.araf.xyz",
+    "imageUrl": "https://app.araf.xyz/og-image.svg",
+    "buttonTitle": "Araf'ı Başlat",
+    "splashImageUrl": "https://app.araf.xyz/splash.svg",
     "splashBackgroundColor": "#060608"
   }
 }
