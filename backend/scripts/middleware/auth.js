@@ -3,29 +3,46 @@
 const { verifyJWT, isJWTBlacklisted, revokeRefreshToken } = require('../services/siwe')
 const logger = require('../utils/logger')
 
+async function validateToken(rawToken, source) {
+  const payload = verifyJWT(rawToken)
+  if (payload.jti && (await isJWTBlacklisted(payload.jti))) {
+    const err = new Error('Oturum geçersiz kılınmış. Lütfen yeniden giriş yapın.')
+    err.statusCode = 401
+    throw err
+  }
+  return { payload, source, rawToken }
+}
+
 async function getTokenPayload(req) {
+  const authHeader = req.headers.authorization
   const cookieToken = req.cookies?.araf_jwt
-  if (cookieToken) {
-    const payload = verifyJWT(cookieToken)
-    if (payload.jti && (await isJWTBlacklisted(payload.jti))) {
-      const err = new Error('Oturum geçersiz kılınmış. Lütfen yeniden giriş yapın.')
-      err.statusCode = 401
-      throw err
-    }
-    return { payload, source: 'cookie', rawToken: cookieToken }
+
+  let bearerResult = null
+  let cookieResult = null
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    bearerResult = await validateToken(authHeader.slice(7), 'bearer')
   }
 
-  const authHeader = req.headers.authorization
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const bearerToken = authHeader.slice(7)
-    const payload = verifyJWT(bearerToken)
-    if (payload.jti && (await isJWTBlacklisted(payload.jti))) {
-      const err = new Error('Oturum geçersiz kılınmış. Lütfen yeniden giriş yapın.')
-      err.statusCode = 401
+  if (cookieToken) {
+    cookieResult = await validateToken(cookieToken, 'cookie')
+  }
+
+  if (bearerResult && cookieResult) {
+    const bearerWallet = bearerResult.payload?.sub?.toLowerCase?.() || null
+    const cookieWallet = cookieResult.payload?.sub?.toLowerCase?.() || null
+
+    if (!bearerWallet || !cookieWallet || bearerWallet !== cookieWallet) {
+      const err = new Error('Bearer ve cookie oturumu farklı cüzdanlara ait. Lütfen yeniden giriş yapın.')
+      err.statusCode = 409
       throw err
     }
-    return { payload, source: 'bearer', rawToken: bearerToken }
+
+    return bearerResult
   }
+
+  if (bearerResult) return bearerResult
+  if (cookieResult) return cookieResult
 
   const err = new Error('Oturum bulunamadı. Lütfen giriş yapın.')
   err.statusCode = 401
@@ -44,7 +61,7 @@ function getPIITokenPayload(req) {
 
 async function requireAuth(req, res, next) {
   try {
-    const { payload, source } = await getTokenPayload(req)
+    const { payload, source, rawToken } = await getTokenPayload(req)
 
     if (source === 'cookie' && payload.type !== 'auth') {
       return res.status(403).json({ error: "Geçersiz cookie token tipi. 'auth' bekleniyordu." })
@@ -57,6 +74,7 @@ async function requireAuth(req, res, next) {
     req.wallet = payload.sub.toLowerCase()
     req.authSource = source
     req.authTokenType = payload.type
+    req.authRawToken = rawToken
     next()
   } catch (err) {
     logger.warn(`[Auth] Token doğrulaması başarısız: ${err.message}`)
