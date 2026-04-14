@@ -44,7 +44,7 @@ async function getReadiness({ worker, provider } = {}) {
   ];
 
   if (isProduction) {
-    requiredConfig.push("SIWE_URI", "ARAF_ESCROW_ADDRESS", "BASE_RPC_URL");
+    requiredConfig.push("SIWE_URI", "SIWE_CHAIN_ID", "ARAF_ESCROW_ADDRESS", "BASE_RPC_URL");
   }
 
   const missingConfig = requiredConfig.filter((key) => !process.env[key]);
@@ -62,6 +62,13 @@ async function getReadiness({ worker, provider } = {}) {
       }
     } catch {
       missingConfig.push("SIWE_URI_INVALID");
+    }
+  }
+
+  if (isProduction && process.env.SIWE_CHAIN_ID) {
+    const parsedSiweChainId = Number(process.env.SIWE_CHAIN_ID);
+    if (!Number.isInteger(parsedSiweChainId) || parsedSiweChainId <= 0) {
+      missingConfig.push("SIWE_CHAIN_ID_INVALID");
     }
   }
 
