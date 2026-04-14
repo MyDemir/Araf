@@ -184,7 +184,8 @@ class EventWorker {
 
   async _connect() {
     const isProduction = process.env.NODE_ENV === "production";
-    const rpcUrl = process.env.BASE_RPC_URL || (!isProduction ? "https://mainnet.base.org" : null);
+    const rpcUrl = process.env.BASE_RPC_URL;
+    const expectedChainId = Number(process.env.CHAIN_ID || 0);
     const contractAddress = process.env.ARAF_ESCROW_ADDRESS;
 
     if (!contractAddress || contractAddress === "0x0000000000000000000000000000000000000000") {
@@ -197,7 +198,14 @@ class EventWorker {
     }
 
     if (!rpcUrl) {
-      throw new Error("[Worker] KRİTİK: BASE_RPC_URL production'da zorunludur.");
+      throw new Error("[Worker] KRİTİK: BASE_RPC_URL zorunludur. Mainnet fallback kaldırıldı.");
+    }
+
+    if (!Number.isInteger(expectedChainId) || expectedChainId <= 0) {
+      if (isProduction) {
+        throw new Error("[Worker] KRİTİK: CHAIN_ID production'da zorunludur ve pozitif integer olmalıdır.");
+      }
+      logger.warn("[Worker] CHAIN_ID tanımsız/geçersiz; chain doğrulaması atlanacak.");
     }
 
     const wsRpcUrl = process.env.BASE_WS_RPC_URL;
@@ -218,6 +226,19 @@ class EventWorker {
     }
 
     this.contract = new ethers.Contract(contractAddress, ARAF_ABI, this.provider);
+
+    // [TR] Event worker'ın yanlış chain'de çalışmasını başlangıçta engelle.
+    // [EN] Block worker startup if provider resolves to an unexpected chain.
+    if (Number.isInteger(expectedChainId) && expectedChainId > 0) {
+      const network = await this.provider.getNetwork();
+      const actualChainId = Number(network.chainId);
+      if (actualChainId !== expectedChainId) {
+        throw new Error(
+          `[Worker] Chain uyumsuzluğu: beklenen=${expectedChainId}, provider=${actualChainId}. BASE_RPC_URL/CHAIN_ID kontrol edin.`
+        );
+      }
+    }
+
     logger.info(`[Worker] Kontrat izleniyor: ${contractAddress}`);
     this._setState("connected", "provider + kontrat hazır");
   }
