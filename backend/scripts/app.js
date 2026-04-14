@@ -226,6 +226,19 @@ async function bootstrap() {
         logger.error("[GÜVENLİK] SIWE_DOMAIN production'da 'localhost' olamaz! Gerçek domain ayarlayın.");
         process.exit(1);
       }
+
+      const siweChainId = Number(process.env.SIWE_CHAIN_ID || 0);
+      if (!Number.isInteger(siweChainId) || siweChainId <= 0) {
+        logger.error("[GÜVENLİK] SIWE_CHAIN_ID production'da zorunlu ve pozitif integer olmalıdır.");
+        process.exit(1);
+      }
+    }
+
+    // [TR] SameSite=None konfigürasyonunda Secure cookie zorunludur.
+    // [EN] Secure cookies are mandatory when SameSite=None is configured.
+    const cookieSameSite = String(process.env.COOKIE_SAMESITE || "lax").toLowerCase();
+    if (cookieSameSite === "none" && process.env.NODE_ENV !== "production") {
+      logger.warn("[SECURITY] COOKIE_SAMESITE=none dev ortamında HTTPS gerektirir; local HTTP'de cookie yazımı başarısız olabilir.");
     }
 
     await connectDB();
