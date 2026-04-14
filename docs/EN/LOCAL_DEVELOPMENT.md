@@ -127,6 +127,7 @@ RELAYER_PRIVATE_KEY=0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cd
 
 SIWE_DOMAIN=localhost:5173
 SIWE_URI=http://localhost:5173
+SIWE_CHAIN_ID=31337
 ALLOWED_ORIGINS=http://localhost:5173
 
 # Optional for local clarity; recommended when you want deterministic replay boot:
@@ -386,6 +387,8 @@ fly secrets set \
   RELAYER_PRIVATE_KEY="0x<RELAYER_PRIVATE_KEY>" \
   SIWE_DOMAIN="araf-protocol.vercel.app" \
   SIWE_URI="https://araf-protocol.vercel.app" \
+  SIWE_CHAIN_ID="84532" \
+  COOKIE_SAMESITE="none" \
   ALLOWED_ORIGINS="https://araf-protocol.vercel.app" \
   ARAF_DEPLOYMENT_BLOCK="<DEPLOY_BLOCK_NUMBER>"
 
@@ -505,6 +508,8 @@ fly secrets set \
   TREASURY_ADDRESS="<GNOSIS_SAFE>" \
   SIWE_DOMAIN="app.araf.xyz" \
   SIWE_URI="https://app.araf.xyz" \
+  SIWE_CHAIN_ID="8453" \
+  COOKIE_SAMESITE="none" \
   ALLOWED_ORIGINS="https://app.araf.xyz"
 ```
 
@@ -561,6 +566,7 @@ vercel --prod
 | `CHAIN_ID` | `31337` | `84532` | `8453` |
 | `SIWE_DOMAIN` | `localhost:5173` | deployed frontend domain | real domain |
 | `SIWE_URI` | `http://localhost:5173` | deployed frontend URL | real production URL |
+| `SIWE_CHAIN_ID` | `31337` | `84532` | `8453` |
 | Treasury | test wallet | test wallet | Gnosis Safe |
 | Relayer | Hardhat wallet | separate test wallet | Gelato recommended |
 | RPC | `http://127.0.0.1:8545` | Base Sepolia RPC | Base Mainnet RPC |
