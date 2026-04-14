@@ -40,26 +40,23 @@ const isValidEscrowAddress =
   Boolean(ESCROW_ADDRESS) &&
   ESCROW_ADDRESS !== '0x0000000000000000000000000000000000000000'
 
-const PROD_ALLOWED_CHAIN_ID = Number(import.meta.env.VITE_ALLOWED_CHAIN_ID || 84532)
-const PROD_CHAIN_LABELS = {
+const CHAIN_LABELS = {
   8453: 'Base Mainnet',
   84532: 'Base Sepolia',
   31337: 'Hardhat Local',
-}
-const DEV_CHAIN_LABELS = {
-  31337: 'Hardhat Local',
-  84532: 'Base Sepolia',
-  8453: 'Base Mainnet',
 }
 
-const getSupportedChains = () => {
+// [TR] Production'da tek chain, development'ta çoklu chain desteği.
+// [EN] Single-chain in production, multi-chain support in development.
+const getSupportedChainLabels = () => {
   if (import.meta.env.PROD) {
-    return {
-      [PROD_ALLOWED_CHAIN_ID]: PROD_CHAIN_LABELS[PROD_ALLOWED_CHAIN_ID] || `Chain ${PROD_ALLOWED_CHAIN_ID}`,
-    }
+    const id = Number(import.meta.env.VITE_ALLOWED_CHAIN_ID || 84532)
+    return { [id]: CHAIN_LABELS[id] || `Chain ${id}` }
   }
-  return DEV_CHAIN_LABELS
+  return CHAIN_LABELS
 }
+
+const getSupportedChainNamesText = () => Object.values(getSupportedChainLabels()).join(' veya ')
 
 export function useArafContract() {
   const publicClient = usePublicClient()
@@ -67,9 +64,9 @@ export function useArafContract() {
   const chainId = useChainId()
 
   const validateChain = useCallback(() => {
-    const supportedChains = getSupportedChains()
+    const supportedChains = getSupportedChainLabels()
     if (!supportedChains[chainId]) {
-      const supportedNames = Object.values(supportedChains).join(' veya ')
+      const supportedNames = getSupportedChainNamesText()
       throw new Error(
         `Yanlış ağ! Cüzdanınız şu an Chain ID ${chainId} üzerinde. ` +
         `Araf Protocol bu ortamda yalnız ${supportedNames} üzerinde çalışır.`
