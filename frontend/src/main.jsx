@@ -21,6 +21,8 @@ const getCodespacesRPC = (port) => {
   }
 }
 
+// [TR] Zincir seçimi dosya içinde tutulur; harici config dosyasına bağımlı değildir.
+// [EN] Chain selection is kept in-file; no external config file dependency.
 const CHAIN_MAP = {
   8453: base,
   84532: baseSepolia,
@@ -35,7 +37,7 @@ const activeChains = import.meta.env.PROD
 
 const transports = {}
 for (const chain of activeChains) {
-  if (chain.id === hardhat.id) {
+  if (chain.id === 31337) {
     transports[chain.id] = http(getCodespacesRPC(8545))
   } else {
     transports[chain.id] = http()
