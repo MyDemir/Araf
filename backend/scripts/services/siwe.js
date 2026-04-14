@@ -10,6 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET
 const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '15m'
 const FRAME_TOKEN_EXPIRES = process.env.FRAME_TOKEN_EXPIRES_IN || '5m'
 const PII_EXPIRES = process.env.PII_TOKEN_EXPIRES_IN || '15m'
+const SIWE_CHAIN_ID = Number(process.env.SIWE_CHAIN_ID || 0)
 const NONCE_TTL_SECS = 5 * 60
 const JWT_BLACKLIST_PREFIX = 'blacklist:jti:'
 const REFRESH_TOKEN_PREFIX = 'refresh:'
@@ -35,11 +36,14 @@ function getSiweConfig() {
     if (parsedUri.host !== domainRaw) {
       throw new Error('SIWE_DOMAIN ve SIWE_URI host uyuşmuyor.')
     }
+    if (!Number.isInteger(SIWE_CHAIN_ID) || SIWE_CHAIN_ID <= 0) {
+      throw new Error('SIWE_CHAIN_ID production ortamında zorunludur ve pozitif integer olmalıdır.')
+    }
   }
 
   const domain = domainRaw || 'localhost'
   const uri = uriRaw || `http://${domain}`
-  return { domain, uri }
+  return { domain, uri, chainId: SIWE_CHAIN_ID || null }
 }
 
 async function scanKeys(redis, pattern) {
@@ -76,7 +80,7 @@ async function consumeNonce(walletAddress) {
 
 async function verifySiweSignature(messageStr, signature) {
   const message = new SiweMessage(messageStr)
-  const { domain: expectedDomain, uri: expectedUri } = getSiweConfig()
+  const { domain: expectedDomain, uri: expectedUri, chainId: expectedChainId } = getSiweConfig()
 
   if (message.domain !== expectedDomain) {
     throw new Error('SIWE domain uyuşmazlığı.')
@@ -86,6 +90,12 @@ async function verifySiweSignature(messageStr, signature) {
   const expected = new URL(expectedUri)
   if (incoming.origin !== expected.origin) {
     throw new Error('SIWE URI origin uyuşmazlığı.')
+  }
+
+  // [TR] Base Sepolia / Base Mainnet ayrışmasını imza aşamasında zorunlu kıl.
+  // [EN] Enforce Base Sepolia / Base Mainnet split at SIWE verification time.
+  if (expectedChainId && Number(message.chainId) !== Number(expectedChainId)) {
+    throw new Error(`SIWE chainId uyuşmazlığı. Beklenen: ${expectedChainId}, gelen: ${message.chainId}`)
   }
 
   const storedNonce = await consumeNonce(message.address.toLowerCase())
