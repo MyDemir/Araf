@@ -46,6 +46,12 @@ const CHAIN_LABELS = {
   31337: 'Hardhat Local',
 }
 
+const BASE_SEPOLIA_CHAIN_ID = 84532
+const DEFAULT_USDC_FAUCET_URL = 'https://faucet.circle.com/'
+
+const getTestnetUsdcFaucetUrl = () =>
+  import.meta.env.VITE_TESTNET_USDC_FAUCET_URL || DEFAULT_USDC_FAUCET_URL
+
 // [TR] Production'da tek chain, development'ta çoklu chain desteği.
 // [EN] Single-chain in production, multi-chain support in development.
 const getSupportedChainLabels = () => {
@@ -169,11 +175,26 @@ export function useArafContract() {
 
   const mintToken = useCallback(
     async (tokenAddress) => {
+      validateChain()
+
+      if (chainId === BASE_SEPOLIA_CHAIN_ID) {
+        const faucetUrl = getTestnetUsdcFaucetUrl()
+
+        if (typeof window === 'undefined') {
+          throw new Error(`Base Sepolia USDC faucet bağlantısı: ${faucetUrl}`)
+        }
+
+        const opened = window.open(faucetUrl, '_blank', 'noopener,noreferrer')
+        if (!opened) {
+          window.location.assign(faucetUrl)
+        }
+
+        return { redirected: true, faucetUrl }
+      }
+
       if (!walletClient) {
         throw new Error('İşlem için aktif wallet client bulunamadı. Cüzdan bağlantınızı ve oturum imzanızı kontrol edin.')
       }
-
-      validateChain()
 
       const hash = await walletClient.writeContract({
         address: getAddress(tokenAddress),
@@ -182,12 +203,13 @@ export function useArafContract() {
       })
       return publicClient.waitForTransactionReceipt({ hash })
     },
-    [walletClient, publicClient, validateChain],
+    [walletClient, publicClient, validateChain, chainId],
   )
 
   const getAllowance = useCallback(
     async (tokenAddress, ownerAddress) => {
       if (!isValidEscrowAddress) return 0n
+
       try {
         return await publicClient.readContract({
           address: getAddress(tokenAddress),
@@ -197,6 +219,7 @@ export function useArafContract() {
         })
       } catch {
         return 0n
+
       }
     },
     [publicClient],
