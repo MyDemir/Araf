@@ -36,6 +36,7 @@ const ERC20_ABI = parseAbi([
 ])
 
 const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_ADDRESS
+const USDC_ADDRESS = import.meta.env.VITE_USDC_ADDRESS
 const isValidEscrowAddress =
   Boolean(ESCROW_ADDRESS) &&
   ESCROW_ADDRESS !== '0x0000000000000000000000000000000000000000'
@@ -51,6 +52,15 @@ const DEFAULT_USDC_FAUCET_URL = 'https://faucet.circle.com/'
 
 const getTestnetUsdcFaucetUrl = () =>
   import.meta.env.VITE_TESTNET_USDC_FAUCET_URL || DEFAULT_USDC_FAUCET_URL
+
+const isSameAddress = (left, right) => {
+  if (!left || !right) return false
+  try {
+    return getAddress(left) === getAddress(right)
+  } catch {
+    return false
+  }
+}
 
 // [TR] Production'da tek chain, development'ta çoklu chain desteği.
 // [EN] Single-chain in production, multi-chain support in development.
@@ -177,7 +187,11 @@ export function useArafContract() {
     async (tokenAddress) => {
       validateChain()
 
-      if (chainId === BASE_SEPOLIA_CHAIN_ID) {
+      // [TR] Base Sepolia'da yalnız resmi USDC butonu Circle faucet'e yönlenir.
+      //      Mock USDT aynı ağda kendi MockERC20 mint() fonksiyonunu çağırmaya devam eder.
+      // [EN] On Base Sepolia, only the official USDC button redirects to Circle faucet.
+      //      Mock USDT keeps calling its own MockERC20 mint() function on the same network.
+      if (chainId === BASE_SEPOLIA_CHAIN_ID && isSameAddress(tokenAddress, USDC_ADDRESS)) {
         const faucetUrl = getTestnetUsdcFaucetUrl()
 
         if (typeof window === 'undefined') {
