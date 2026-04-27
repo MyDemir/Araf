@@ -1,0 +1,138 @@
+name: Deploy Base Sepolia
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy contracts, backend and frontend
+    runs-on: ubuntu-latest
+
+    env:
+      FLY_APP_NAME: ${{ vars.FLY_APP_NAME || 'araf-protocol-backend' }}
+      FRONTEND_DOMAIN: ${{ vars.FRONTEND_DOMAIN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate generated secrets
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          MASTER_ENCRYPTION_KEY: ${{ secrets.MASTER_ENCRYPTION_KEY }}
+        run: |
+          test -n "$FRONTEND_DOMAIN" || { echo "FRONTEND_DOMAIN repository variable is required. Example: your-app.vercel.app"; exit 1; }
+          test ${#JWT_SECRET} -ge 64 || { echo "JWT_SECRET must be generated and at least 64 characters."; exit 1; }
+          test ${#MASTER_ENCRYPTION_KEY} -eq 64 || { echo "MASTER_ENCRYPTION_KEY must be 32 bytes / 64 hex characters."; exit 1; }
+
+      - name: Install contract dependencies
+        working-directory: contracts
+        run: npm install
+
+      - name: Create contracts env
+        run: |
+          cat > contracts/.env << EOF
+          DEPLOYER_PRIVATE_KEY=${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          TREASURY_ADDRESS=${{ secrets.TREASURY_ADDRESS }}
+          BASE_SEPOLIA_RPC_URL=${{ secrets.BASE_SEPOLIA_RPC_URL }}
+          BASE_SEPOLIA_USDC_ADDRESS=${{ vars.BASE_SEPOLIA_USDC_ADDRESS }}
+          BASESCAN_API_KEY=${{ secrets.BASESCAN_API_KEY }}
+          REPORT_GAS=true
+          EOF
+
+      - name: Compile contracts
+        working-directory: contracts
+        run: npx hardhat compile
+
+      - name: Deploy contracts to Base Sepolia
+        working-directory: contracts
+        run: |
+          npx hardhat run scripts/deploy.js --network base-sepolia | tee ../deploy.log
+
+      - name: Export deployment values
+        run: |
+          ESCROW=$(grep '^VITE_ESCROW_ADDRESS=' deploy.log | tail -n 1 | cut -d '=' -f2)
+          USDT=$(grep '^VITE_USDT_ADDRESS=' deploy.log | tail -n 1 | cut -d '=' -f2)
+          USDC=$(grep '^VITE_USDC_ADDRESS=' deploy.log | tail -n 1 | cut -d '=' -f2)
+          CHAIN_ID=$(grep '^VITE_ALLOWED_CHAIN_ID=' deploy.log | tail -n 1 | cut -d '=' -f2)
+          DEPLOY_BLOCK=$(grep '^ARAF_DEPLOYMENT_BLOCK=' deploy.log | tail -n 1 | cut -d '=' -f2)
+
+          test -n "$ESCROW" || { echo "Missing VITE_ESCROW_ADDRESS"; exit 1; }
+          test -n "$USDT" || { echo "Missing VITE_USDT_ADDRESS"; exit 1; }
+          test -n "$USDC" || { echo "Missing VITE_USDC_ADDRESS"; exit 1; }
+          test -n "$CHAIN_ID" || { echo "Missing VITE_ALLOWED_CHAIN_ID"; exit 1; }
+          test -n "$DEPLOY_BLOCK" || { echo "Missing ARAF_DEPLOYMENT_BLOCK"; exit 1; }
+
+          echo "ESCROW=$ESCROW" >> "$GITHUB_ENV"
+          echo "USDT=$USDT" >> "$GITHUB_ENV"
+          echo "USDC=$USDC" >> "$GITHUB_ENV"
+          echo "CHAIN_ID=$CHAIN_ID" >> "$GITHUB_ENV"
+          echo "DEPLOY_BLOCK=$DEPLOY_BLOCK" >> "$GITHUB_ENV"
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Stage backend secrets on Fly
+        working-directory: backend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl secrets set \
+            NODE_ENV="production" \
+            PORT="4000" \
+            MONGODB_URI="${{ secrets.MONGODB_URI }}" \
+            REDIS_URL="${{ secrets.REDIS_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            JWT_EXPIRES_IN="15m" \
+            FRAME_TOKEN_EXPIRES_IN="5m" \
+            PII_TOKEN_EXPIRES_IN="15m" \
+            KMS_PROVIDER="env" \
+            MASTER_ENCRYPTION_KEY="${{ secrets.MASTER_ENCRYPTION_KEY }}" \
+            BASE_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
+            BASE_WS_RPC_URL="${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}" \
+            ARAF_ESCROW_ADDRESS="$ESCROW" \
+            ARAF_DEPLOYMENT_BLOCK="$DEPLOY_BLOCK" \
+            CHAIN_ID="84532" \
+            SIWE_CHAIN_ID="84532" \
+            TREASURY_ADDRESS="${{ secrets.TREASURY_ADDRESS }}" \
+            RELAYER_PRIVATE_KEY="${{ secrets.RELAYER_PRIVATE_KEY }}" \
+            SIWE_DOMAIN="$FRONTEND_DOMAIN" \
+            SIWE_URI="https://$FRONTEND_DOMAIN" \
+            ALLOWED_ORIGINS="https://$FRONTEND_DOMAIN" \
+            COOKIE_SAMESITE="none" \
+            --stage \
+            -a "$FLY_APP_NAME"
+
+      - name: Deploy backend to Fly
+        working-directory: backend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --remote-only -a "$FLY_APP_NAME"
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy frontend to Vercel
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+          vercel deploy --prod --yes --token="$VERCEL_TOKEN" \
+            --build-env VITE_ESCROW_ADDRESS="$ESCROW" \
+            --build-env VITE_USDT_ADDRESS="$USDT" \
+            --build-env VITE_USDC_ADDRESS="$USDC" \
+            --build-env VITE_ALLOWED_CHAIN_ID="84532" \
+            --build-env VITE_TESTNET_USDC_FAUCET_URL="${{ vars.VITE_TESTNET_USDC_FAUCET_URL || 'https://faucet.circle.com/' }}"
