@@ -1,0 +1,223 @@
+name: Deploy Runtime Base Sepolia
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_backend:
+        description: "Deploy backend to Fly with the existing contract addresses"
+        required: false
+        default: true
+        type: boolean
+      deploy_frontend:
+        description: "Deploy frontend to Vercel with the existing contract addresses"
+        required: false
+        default: false
+        type: boolean
+      araf_escrow_address:
+        description: "Optional override for ARAF_ESCROW_ADDRESS. Empty = use repository variable ARAF_ESCROW_ADDRESS."
+        required: false
+        default: ""
+        type: string
+      usdt_address:
+        description: "Optional override for VITE_USDT_ADDRESS. Empty = use repository variable BASE_SEPOLIA_USDT_ADDRESS."
+        required: false
+        default: ""
+        type: string
+      usdc_address:
+        description: "Optional override for VITE_USDC_ADDRESS. Empty = use repository variable BASE_SEPOLIA_USDC_ADDRESS."
+        required: false
+        default: ""
+        type: string
+      deployment_block:
+        description: "Optional override for ARAF_DEPLOYMENT_BLOCK. Empty = use repository variable ARAF_DEPLOYMENT_BLOCK."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-deploy:
+    name: Deploy backend/frontend without redeploying contracts
+    runs-on: ubuntu-latest
+
+    env:
+      FLY_APP_NAME: ${{ vars.FLY_APP_NAME || 'araf-protocol-backend' }}
+      FRONTEND_DOMAIN: ${{ vars.FRONTEND_DOMAIN }}
+      CHAIN_ID: ${{ vars.BASE_SEPOLIA_CHAIN_ID || '84532' }}
+      VITE_TESTNET_USDC_FAUCET_URL: ${{ vars.VITE_TESTNET_USDC_FAUCET_URL || 'https://faucet.circle.com/' }}
+
+      VAR_ARAF_ESCROW_ADDRESS: ${{ vars.ARAF_ESCROW_ADDRESS }}
+      VAR_BASE_SEPOLIA_USDT_ADDRESS: ${{ vars.BASE_SEPOLIA_USDT_ADDRESS }}
+      VAR_BASE_SEPOLIA_USDC_ADDRESS: ${{ vars.BASE_SEPOLIA_USDC_ADDRESS }}
+      VAR_ARAF_DEPLOYMENT_BLOCK: ${{ vars.ARAF_DEPLOYMENT_BLOCK }}
+
+      INPUT_ARAF_ESCROW_ADDRESS: ${{ inputs.araf_escrow_address }}
+      INPUT_USDT_ADDRESS: ${{ inputs.usdt_address }}
+      INPUT_USDC_ADDRESS: ${{ inputs.usdc_address }}
+      INPUT_DEPLOYMENT_BLOCK: ${{ inputs.deployment_block }}
+
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve fixed Base Sepolia deployment values
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ESCROW="${INPUT_ARAF_ESCROW_ADDRESS:-$VAR_ARAF_ESCROW_ADDRESS}"
+          USDT="${INPUT_USDT_ADDRESS:-$VAR_BASE_SEPOLIA_USDT_ADDRESS}"
+          USDC="${INPUT_USDC_ADDRESS:-$VAR_BASE_SEPOLIA_USDC_ADDRESS}"
+          DEPLOY_BLOCK="${INPUT_DEPLOYMENT_BLOCK:-$VAR_ARAF_DEPLOYMENT_BLOCK}"
+
+          ADDRESS_RE='^0x[a-fA-F0-9]{40}$'
+          [[ "$ESCROW" =~ $ADDRESS_RE ]] || { echo "ARAF_ESCROW_ADDRESS is missing or invalid."; exit 1; }
+          [[ "$USDT" =~ $ADDRESS_RE ]] || { echo "BASE_SEPOLIA_USDT_ADDRESS is missing or invalid."; exit 1; }
+          [[ "$USDC" =~ $ADDRESS_RE ]] || { echo "BASE_SEPOLIA_USDC_ADDRESS is missing or invalid."; exit 1; }
+          [[ "$DEPLOY_BLOCK" =~ ^[0-9]+$ ]] || { echo "ARAF_DEPLOYMENT_BLOCK is missing or invalid."; exit 1; }
+          [[ "$CHAIN_ID" == "84532" ]] || { echo "This workflow is locked to Base Sepolia chainId 84532."; exit 1; }
+
+          echo "ESCROW=$ESCROW" >> "$GITHUB_ENV"
+          echo "USDT=$USDT" >> "$GITHUB_ENV"
+          echo "USDC=$USDC" >> "$GITHUB_ENV"
+          echo "DEPLOY_BLOCK=$DEPLOY_BLOCK" >> "$GITHUB_ENV"
+
+      - name: Validate backend config
+        if: ${{ inputs.deploy_backend }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          MASTER_ENCRYPTION_KEY: ${{ secrets.MASTER_ENCRYPTION_KEY }}
+          BASE_SEPOLIA_RPC_URL: ${{ secrets.BASE_SEPOLIA_RPC_URL }}
+          BASE_SEPOLIA_WS_RPC_URL: ${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}
+          TREASURY_ADDRESS: ${{ secrets.TREASURY_ADDRESS }}
+          RELAYER_PRIVATE_KEY: ${{ secrets.RELAYER_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$FRONTEND_DOMAIN" || { echo "FRONTEND_DOMAIN repository variable is required. Example: araf-protocol-demo.vercel.app"; exit 1; }
+          test -n "$FLY_API_TOKEN" || { echo "FLY_API_TOKEN secret is required."; exit 1; }
+          test -n "$MONGODB_URI" || { echo "MONGODB_URI secret is required."; exit 1; }
+          test -n "$REDIS_URL" || { echo "REDIS_URL secret is required."; exit 1; }
+          test -n "$BASE_SEPOLIA_RPC_URL" || { echo "BASE_SEPOLIA_RPC_URL secret is required."; exit 1; }
+          test -n "$BASE_SEPOLIA_WS_RPC_URL" || { echo "BASE_SEPOLIA_WS_RPC_URL secret is required."; exit 1; }
+          test -n "$TREASURY_ADDRESS" || { echo "TREASURY_ADDRESS secret is required."; exit 1; }
+          test -n "$RELAYER_PRIVATE_KEY" || { echo "RELAYER_PRIVATE_KEY secret is required."; exit 1; }
+
+          test ${#JWT_SECRET} -ge 64 || { echo "JWT_SECRET must be at least 64 characters."; exit 1; }
+          test ${#MASTER_ENCRYPTION_KEY} -eq 64 || { echo "MASTER_ENCRYPTION_KEY must be 32 bytes / 64 hex characters."; exit 1; }
+
+      - name: Setup Fly CLI
+        if: ${{ inputs.deploy_backend }}
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Stage backend secrets on Fly
+        if: ${{ inputs.deploy_backend }}
+        working-directory: backend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flyctl secrets set \
+            NODE_ENV="production" \
+            PORT="4000" \
+            MONGODB_URI="${{ secrets.MONGODB_URI }}" \
+            REDIS_URL="${{ secrets.REDIS_URL }}" \
+            JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            JWT_EXPIRES_IN="15m" \
+            FRAME_TOKEN_EXPIRES_IN="5m" \
+            PII_TOKEN_EXPIRES_IN="15m" \
+            KMS_PROVIDER="env" \
+            MASTER_ENCRYPTION_KEY="${{ secrets.MASTER_ENCRYPTION_KEY }}" \
+            BASE_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
+            BASE_SEPOLIA_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
+            BASE_WS_RPC_URL="${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}" \
+            ARAF_ESCROW_ADDRESS="$ESCROW" \
+            ARAF_DEPLOYMENT_BLOCK="$DEPLOY_BLOCK" \
+            CHAIN_ID="$CHAIN_ID" \
+            SIWE_CHAIN_ID="$CHAIN_ID" \
+            TREASURY_ADDRESS="${{ secrets.TREASURY_ADDRESS }}" \
+            RELAYER_PRIVATE_KEY="${{ secrets.RELAYER_PRIVATE_KEY }}" \
+            SIWE_DOMAIN="$FRONTEND_DOMAIN" \
+            SIWE_URI="https://$FRONTEND_DOMAIN" \
+            ALLOWED_ORIGINS="https://$FRONTEND_DOMAIN" \
+            COOKIE_SAMESITE="none" \
+            --stage \
+            -a "$FLY_APP_NAME"
+
+      - name: Deploy backend to Fly
+        if: ${{ inputs.deploy_backend }}
+        working-directory: backend
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flyctl deploy --remote-only -a "$FLY_APP_NAME"
+
+      - name: Check backend health
+        if: ${{ inputs.deploy_backend }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 10
+          curl --fail --show-error --retry 10 --retry-delay 5 "https://$FLY_APP_NAME.fly.dev/health"
+
+      - name: Validate Vercel config
+        if: ${{ inputs.deploy_frontend }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" || { echo "VERCEL_TOKEN secret is required when deploy_frontend is true."; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo "VERCEL_ORG_ID secret is required when deploy_frontend is true."; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo "VERCEL_PROJECT_ID secret is required when deploy_frontend is true."; exit 1; }
+
+      - name: Install Vercel CLI
+        if: ${{ inputs.deploy_frontend }}
+        run: npm install -g vercel
+
+      - name: Deploy frontend to Vercel
+        if: ${{ inputs.deploy_frontend }}
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+          vercel deploy --prod --yes --token="$VERCEL_TOKEN" \
+            --build-env VITE_API_URL="https://$FLY_APP_NAME.fly.dev" \
+            --build-env VITE_ESCROW_ADDRESS="$ESCROW" \
+            --build-env VITE_USDT_ADDRESS="$USDT" \
+            --build-env VITE_USDC_ADDRESS="$USDC" \
+            --build-env VITE_ALLOWED_CHAIN_ID="$CHAIN_ID" \
+            --build-env VITE_TESTNET_USDC_FAUCET_URL="$VITE_TESTNET_USDC_FAUCET_URL"
+
+      - name: Deployment summary
+        shell: bash
+        run: |
+          {
+            echo "### Runtime Base Sepolia deployment"
+            echo ""
+            echo "- Backend URL: https://$FLY_APP_NAME.fly.dev"
+            echo "- Frontend domain: https://$FRONTEND_DOMAIN"
+            echo "- VITE_ESCROW_ADDRESS: $ESCROW"
+            echo "- VITE_USDT_ADDRESS: $USDT"
+            echo "- VITE_USDC_ADDRESS: $USDC"
+            echo "- VITE_ALLOWED_CHAIN_ID: $CHAIN_ID"
+            echo "- ARAF_DEPLOYMENT_BLOCK: $DEPLOY_BLOCK"
+          } >> "$GITHUB_STEP_SUMMARY"
