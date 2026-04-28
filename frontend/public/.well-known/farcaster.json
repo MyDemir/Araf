@@ -1,27 +1,27 @@
 {
   "accountAssociation": {
-    "header": "REPLACE_WITH_FARCASTER_ACCOUNT_ASSOCIATION_HEADER",
-    "payload": "REPLACE_WITH_FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD",
-    "signature": "REPLACE_WITH_SIGNED_FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE"
+    "header": "<FARCASTER_HEADER>",
+    "payload": "<FARCASTER_PAYLOAD>",
+    "signature": "<FARCASTER_SIGNATURE>"
   },
   "frame": {
     "version": "2",
-    "name": "Araf Protocol,
-    "iconUrl": "https://app.araf.xyz/icon.png",
-    "homeUrl": "https://app.araf.xyz",
-    "imageUrl": "https://app.araf.xyz/og-image.png",
+    "name": "Araf Protocol",
+    "iconUrl": "https://araf-protocol-demo.vercel.app/icon.png",
+    "homeUrl": "https://araf-protocol-demo.vercel.app",
+    "imageUrl": "https://araf-protocol-demo.vercel.app/og-image.png",
     "buttonTitle": "Launch Araf",
-    "splashImageUrl": "https://app.araf.xyz/splash.png",
+    "splashImageUrl": "https://araf-protocol-demo.vercel.app/splash.png",
     "splashBackgroundColor": "#060608"
   },
   "miniapp": {
     "version": "2",
     "name": "Araf Protocol",
-    "iconUrl": "https://app.araf.xyz/icon.png",
-    "homeUrl": "https://app.araf.xyz",
-    "imageUrl": "https://app.araf.xyz/og-image.png",
+    "iconUrl": "https://araf-protocol-demo.vercel.app/icon.png",
+    "homeUrl": "https://araf-protocol-demo.vercel.app",
+    "imageUrl": "https://araf-protocol-demo.vercel.app/og-image.png",
     "buttonTitle": "Launch Araf",
-    "splashImageUrl": "https://app.araf.xyz/splash.png",
+    "splashImageUrl": "https://araf-protocol-demo.vercel.app/splash.png",
     "splashBackgroundColor": "#060608"
   }
 }
