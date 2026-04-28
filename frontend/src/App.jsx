@@ -2037,9 +2037,9 @@ function App() {
       ];
 
   const socialLinks = {
-    github: import.meta.env.VITE_SOCIAL_GITHUB || 'https://github.com/',
-    twitter: import.meta.env.VITE_SOCIAL_TWITTER || 'https://x.com/',
-    farcaster: import.meta.env.VITE_SOCIAL_FARCASTER || 'https://warpcast.com/',
+    github: import.meta.env.VITE_SOCIAL_GITHUB || 'https://github.com/ArafProtokol/Araf',
+    twitter: import.meta.env.VITE_SOCIAL_TWITTER || 'https://x.com/arafescrow',
+    farcaster: import.meta.env.VITE_SOCIAL_FARCASTER || 'https://farcaster.xyz/arafescrow',
   };
 
   const t = {
