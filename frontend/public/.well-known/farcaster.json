@@ -1,9 +1,9 @@
 {
   "accountAssociation": {
-    "header": "PASTE_REAL_FARCASTER_HEADER_HERE",
-    "payload": "PASTE_REAL_FARCASTER_PAYLOAD_HERE",
-    "signature": "PASTE_REAL_FARCASTER_SIGNATURE_HERE"
-  },
+    "header": "eyJmaWQiOjMwNzYwNTYsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHg1NUI2MUE2Q0NEMWRlOTJDNEMwQzkwOUE2QUFGNTBEQjcwNUZjOTBBIn0",
+    "payload": "eyJkb21haW4iOiJhcmFmLXByb3RvY29sLWRlbW8udmVyY2VsLmFwcCJ9",
+    "signature": "8ydHffyLr/Dwu54T2sMeHww/ONSsSzK9nLyt1Ooo47AN0dJq122eCIiA3vITbQNEwHrtCcYRb2Gb+BSy5tEe7Bs="
+   },
   "miniapp": {
     "version": "1",
     "name": "Araf Protocol",
