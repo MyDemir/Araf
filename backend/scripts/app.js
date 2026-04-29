@@ -60,26 +60,32 @@ let apiRoutesMounted = false;
  */
 function mountApiRoutes() {
   if (apiRoutesMounted) return;
-  apiRoutesMounted = true;
-
-  const logRoutes = require("./routes/logs");
-  const authRoutes = require("./routes/auth");
-  const listingRoutes = require("./routes/listings");
-  const tradeRoutes = require("./routes/trades");
-  const piiRoutes = require("./routes/pii");
-  const feedbackRoutes = require("./routes/feedback");
-  const statsRoutes = require("./routes/stats");
-  const receiptRoutes = require("./routes/receipts");
-  app.use("/api/logs", logRoutes);
-  app.use("/api/auth", authRoutes);
-  app.use("/api/listings", listingRoutes);
-  app.use("/api/trades", tradeRoutes);
-  app.use("/api/pii", piiRoutes);
-  app.use("/api/feedback", feedbackRoutes);
-  app.use("/api/stats", statsRoutes);
-  app.use("/api/receipts", receiptRoutes);
-  app.use((req, res) => res.status(404).json({ error: "İstenen endpoint bulunamadı" }));
-  app.use(globalErrorHandler);
+  try {
+    const logRoutes = require("./routes/logs");
+    const authRoutes = require("./routes/auth");
+    const listingRoutes = require("./routes/listings");
+    const tradeRoutes = require("./routes/trades");
+    const piiRoutes = require("./routes/pii");
+    const feedbackRoutes = require("./routes/feedback");
+    const statsRoutes = require("./routes/stats");
+    const receiptRoutes = require("./routes/receipts");
+    app.use("/api/logs", logRoutes);
+    app.use("/api/auth", authRoutes);
+    app.use("/api/listings", listingRoutes);
+    app.use("/api/trades", tradeRoutes);
+    app.use("/api/pii", piiRoutes);
+    app.use("/api/feedback", feedbackRoutes);
+    app.use("/api/stats", statsRoutes);
+    app.use("/api/receipts", receiptRoutes);
+    app.use((req, res) => res.status(404).json({ error: "İstenen endpoint bulunamadı" }));
+    app.use(globalErrorHandler);
+    apiRoutesMounted = true;
+    logger.info("[BOOT] API route'ları mount edildi.");
+  } catch (err) {
+    apiRoutesMounted = false;
+    logger.error("[BOOT] API route mount başarısız:", err);
+    throw err;
+  }
 }
 
 function clearRuntimeSchedulers() {
