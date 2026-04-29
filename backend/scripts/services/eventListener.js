@@ -72,6 +72,8 @@ const DLQ_KEY = "worker:dlq";
 const RETRY_DELAY_MS = 5_000;
 const MAX_RETRIES = 3;
 const DEFAULT_EVENT_QUERY_BLOCK_RANGE = 10;
+const GET_LOGS_MAX_RETRIES = 5;
+const GET_LOGS_BACKOFF_MS = [1500, 3000, 6000, 12000, 24000];
 
 function _readEventQueryBlockRange() {
   const raw = process.env.EVENT_QUERY_BLOCK_RANGE;
@@ -293,19 +295,14 @@ class EventWorker {
     for (let from = fromBlock; from <= toBlock; from += BLOCK_BATCH_SIZE) {
       const to = Math.min(from + BLOCK_BATCH_SIZE - 1, toBlock);
 
-      const allEvents = [];
       let batchSuccess = true;
-      for (const eventName of EVENT_NAMES) {
-        try {
-          const filtered = await this.contract.queryFilter(eventName, from, to);
-          if (Array.isArray(filtered)) allEvents.push(...filtered);
-        } catch (err) {
-          logger.warn(`[Worker] Replay: ${eventName} sorgusu başarısız (${from}-${to}): ${err.message}`);
-          batchSuccess = false;
-        }
+      let allEvents = [];
+      try {
+        allEvents = await this._queryContractEvents(from, to, "replay");
+      } catch (err) {
+        logger.warn(`[Worker] Replay: range sorgusu başarısız (${from}-${to}): ${err.message}`);
+        batchSuccess = false;
       }
-
-      allEvents.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
 
       for (const event of allEvents) {
         try {
@@ -335,12 +332,12 @@ class EventWorker {
 
     // [TR] Canlı dinleme artık contract.on(...) ile tek tek event abonesi açmaz.
     //      Bunun yerine yeni block sinyalini tetik olarak kullanır ve son işlenen
-    //      bloktan güncel bloğa kadar olan aralığı queryFilter(...) ile tarar.
+    //      bloktan güncel bloğa kadar olan aralığı tek getLogs(...) çağrısı ile tarar.
     //
     // [EN] Live mode no longer opens per-event contract.on(...) subscriptions.
     //      Instead, each new block is treated as a trigger and the worker scans
     //      the full block range from the last processed block to the current block
-    //      via queryFilter(...).
+    //      via a single getLogs(...) call.
     //
     // Bu yaklaşım:
     // - replay ve live path'i aynı veri toplama mantığına yaklaştırır
@@ -403,11 +400,11 @@ class EventWorker {
   }
 
   // [TR] Belirli block aralığındaki event'leri canlı modda toplar ve işler.
-  //      Replay ile aynı queryFilter mantığını kullanır, ancak canlı akış için
+  //      Replay ile aynı getLogs mantığını kullanır, ancak canlı akış için
   //      block ack/state bookkeeping de yapar.
   //
   // [EN] Collects and processes events for a given block range in live mode.
-  //      Uses the same queryFilter model as replay, but additionally updates
+  //      Uses the same getLogs model as replay, but additionally updates
   //      block ack/state bookkeeping required by safe checkpoint advancement.
   async _pollLiveRange(fromBlock, toBlock) {
     if (!this.contract || fromBlock > toBlock) return;
@@ -416,13 +413,7 @@ class EventWorker {
       const to = Math.min(from + BLOCK_BATCH_SIZE - 1, toBlock);
 
       try {
-        const allEvents = [];
-        for (const eventName of EVENT_NAMES) {
-          const filtered = await this.contract.queryFilter(eventName, from, to);
-          if (Array.isArray(filtered)) allEvents.push(...filtered);
-        }
-
-        allEvents.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
+        const allEvents = await this._queryContractEvents(from, to, "live");
 
         // [TR] Boş bloklar checkpoint akışını kilitlemesin diye aralıktaki her blok için
         //      ack state önceden oluşturulur. Eğer bir blokta event yoksa seen=0/acked=0
@@ -452,6 +443,75 @@ class EventWorker {
         throw err;
       }
     }
+  }
+
+  isRpcRateLimitError(err) {
+    const haystack = `${err?.message || ""} ${err?.shortMessage || ""} ${err?.code || ""}`.toLowerCase();
+    return (
+      haystack.includes("429") ||
+      haystack.includes("too many requests") ||
+      haystack.includes("exceeded its compute units")
+    );
+  }
+
+  async _sleep(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async _getLogsWithRetry(filter, context = "unknown") {
+    let lastError;
+    for (let attempt = 1; attempt <= GET_LOGS_MAX_RETRIES; attempt += 1) {
+      try {
+        return await this.provider.getLogs(filter);
+      } catch (err) {
+        lastError = err;
+        if (!this.isRpcRateLimitError(err) || attempt >= GET_LOGS_MAX_RETRIES) {
+          throw err;
+        }
+        const baseDelay = GET_LOGS_BACKOFF_MS[attempt - 1] ?? GET_LOGS_BACKOFF_MS[GET_LOGS_BACKOFF_MS.length - 1];
+        const jitter = Math.floor(Math.random() * 251);
+        const delayMs = baseDelay + jitter;
+        logger.warn(`[Worker] getLogs rate limited, retrying... context=${context} range=${filter.fromBlock}-${filter.toBlock} attempt=${attempt}/${GET_LOGS_MAX_RETRIES} waitMs=${delayMs}`);
+        await this._sleep(delayMs);
+      }
+    }
+    throw lastError;
+  }
+
+  async _queryContractEvents(fromBlock, toBlock, context = "unknown") {
+    if (!this.provider || !this.contract || fromBlock > toBlock) return [];
+
+    const rawLogs = await this._getLogsWithRetry({
+      address: await this.contract.getAddress(),
+      fromBlock,
+      toBlock,
+    }, context);
+
+    const parsedEvents = [];
+    for (const log of rawLogs) {
+      try {
+        const parsed = this.contract.interface.parseLog(log);
+        if (!parsed || !EVENT_NAMES.includes(parsed.name)) {
+          logger.debug(`[Worker] getLogs parse skip: bilinmeyen event block=${log.blockNumber} tx=${log.transactionHash}`);
+          continue;
+        }
+        parsedEvents.push({
+          eventName: parsed.name,
+          args: parsed.args,
+          transactionHash: log.transactionHash,
+          logIndex: log.logIndex,
+          blockNumber: log.blockNumber,
+          blockHash: log.blockHash,
+          address: log.address,
+          raw: log,
+        });
+      } catch (err) {
+        logger.warn(`[Worker] getLogs parse edilemeyen log atlandı: block=${log.blockNumber} tx=${log.transactionHash} err=${err.message}`);
+      }
+    }
+
+    parsedEvents.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
+    return parsedEvents;
   }
 
   // [TR] Bir bloğun ack bookkeeping state'ini garanti eder.
