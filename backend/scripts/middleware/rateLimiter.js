@@ -50,10 +50,18 @@ const logger = require("../utils/logger");
  * Redis store oluşturur.
  */
 function makeStore(prefix) {
-  return new RedisStore({
-    sendCommand: (...args) => getRedisClient().sendCommand(args),
-    prefix: `rl:${prefix}:`,
-  });
+  if (!isReady()) return undefined;
+  try {
+    const client = getRedisClient();
+    if (!client?.isReady) return undefined;
+    return new RedisStore({
+      sendCommand: (...args) => client.sendCommand(args),
+      prefix: `rl:${prefix}:`,
+    });
+  } catch (err) {
+    logger.warn(`[RateLimit] Redis store oluşturulamadı (${prefix}): ${err.message}`);
+    return undefined;
+  }
 }
 
 /**
