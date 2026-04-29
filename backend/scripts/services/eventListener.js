@@ -71,7 +71,23 @@ const LAST_SAFE_BLOCK_KEY = "worker:last_safe_block";
 const DLQ_KEY = "worker:dlq";
 const RETRY_DELAY_MS = 5_000;
 const MAX_RETRIES = 3;
-const BLOCK_BATCH_SIZE = 1_000;
+const DEFAULT_EVENT_QUERY_BLOCK_RANGE = 10;
+
+function _readEventQueryBlockRange() {
+  const raw = process.env.EVENT_QUERY_BLOCK_RANGE;
+  if (raw == null || raw === "") return DEFAULT_EVENT_QUERY_BLOCK_RANGE;
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `[Worker] KRİTİK: EVENT_QUERY_BLOCK_RANGE pozitif integer olmalıdır. Mevcut değer: ${raw}`
+    );
+  }
+
+  return parsed;
+}
+
+const BLOCK_BATCH_SIZE = _readEventQueryBlockRange();
 const CHECKPOINT_INTERVAL_BLOCKS = 50;
 
 // reputation_history sınırsız büyümesin diye üst sınır tutulur.
@@ -151,6 +167,7 @@ class EventWorker {
 
   async start() {
     logger.info("[Worker] Event listener başlatılıyor...");
+    logger.info(`[Worker] EVENT_QUERY_BLOCK_RANGE=${BLOCK_BATCH_SIZE}`);
     this.isRunning = true;
     await this._connect();
     await this._replayMissedEvents();
@@ -263,18 +280,19 @@ class EventWorker {
       const to = Math.min(from + BLOCK_BATCH_SIZE - 1, toBlock);
 
       const allEvents = [];
+      let batchSuccess = true;
       for (const eventName of EVENT_NAMES) {
         try {
           const filtered = await this.contract.queryFilter(eventName, from, to);
           if (Array.isArray(filtered)) allEvents.push(...filtered);
         } catch (err) {
           logger.warn(`[Worker] Replay: ${eventName} sorgusu başarısız (${from}-${to}): ${err.message}`);
+          batchSuccess = false;
         }
       }
 
       allEvents.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
 
-      let batchSuccess = true;
       for (const event of allEvents) {
         try {
           await this._processEvent(event);
