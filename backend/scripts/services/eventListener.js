@@ -163,6 +163,7 @@ class EventWorker {
     // [EN] Live path now uses block-range polling instead of contract.on(...).
     this._livePollInProgress = false;
     this._lastLivePolledBlock = 0;
+    this.lastError = null;
   }
 
   async start() {
@@ -170,6 +171,7 @@ class EventWorker {
     logger.info(`[Worker] EVENT_QUERY_BLOCK_RANGE=${BLOCK_BATCH_SIZE}`);
     this.isRunning = true;
     await this._connect();
+    this.lastError = null;
     await this._replayMissedEvents();
 
     // [TR] Replay tamamlandıktan sonra live polling başlangıç referansı güncel block olur.
@@ -370,6 +372,7 @@ class EventWorker {
           }
         }
       } catch (err) {
+        this.lastError = err;
         logger.error(`[Worker] Live block-range poll hatası: ${err.message}`);
       } finally {
         this._livePollInProgress = false;
@@ -377,6 +380,7 @@ class EventWorker {
     });
 
     this.provider.on("error", async (err) => {
+      this.lastError = err;
       logger.error(`[Worker] Provider hatası: ${err.message}. Yeniden bağlanılıyor...`);
       await this._reconnect();
     });
@@ -595,6 +599,8 @@ class EventWorker {
 
       await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       await this._connect();
+      this.lastError = null;
+    this.lastError = null;
       await this._replayMissedEvents();
 
       if (this.provider) {
