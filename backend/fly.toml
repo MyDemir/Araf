@@ -12,6 +12,7 @@ primary_region = "ams"
 [env]
   PORT = "4000"
   NODE_ENV = "production"
+  EVENT_QUERY_BLOCK_RANGE = "10"
 
 [http_service]
   internal_port = 4000
