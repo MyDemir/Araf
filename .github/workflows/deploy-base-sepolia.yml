@@ -134,7 +134,7 @@ jobs:
             BASE_WS_RPC_URL="${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}" \
             EVENT_POLL_INTERVAL_MS="60000" \
             EVENT_CONFIRMATIONS="2" \
-            EVENT_QUERY_BLOCK_RANGE="500" \
+            EVENT_QUERY_BLOCK_RANGE="10" \
             GET_LOGS_MAX_RETRIES="3" \
             HEALTH_PROVIDER_BLOCK_CACHE_MS="15000" \
             ARAF_ESCROW_ADDRESS="$ESCROW" \
