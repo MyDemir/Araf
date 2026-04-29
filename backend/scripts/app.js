@@ -83,6 +83,19 @@ function clearRuntimeSchedulers() {
   if (sensitiveCleanupInterval) clearInterval(sensitiveCleanupInterval);
 }
 
+
+function areSchedulersStarted() {
+  return Boolean(dlqInterval || reputationDecayInterval || statsSnapshotInterval || pendingCleanupInterval || sensitiveCleanupInterval);
+}
+
+async function interruptibleSleep(ms) {
+  const tick = 250;
+  let elapsed = 0;
+  while (!isShuttingDown && elapsed < ms) {
+    await new Promise((r) => setTimeout(r, Math.min(tick, ms - elapsed)));
+    elapsed += tick;
+  }
+}
 function startSchedulers() {
   dlqInterval = setInterval(processDLQ, 60_000);
   reputationDecayDelay = setTimeout(() => runReputationDecay(), 30_000);
@@ -110,7 +123,8 @@ async function startWorkerWithRetry() {
       updateRuntimeState({ workerReady: false });
       markDegraded(err, { worker: true });
       logger.error(`[BOOT] worker.start başarısız, retry ${waitMs}ms: ${err.message}`);
-      await new Promise((r) => setTimeout(r, waitMs));
+      await interruptibleSleep(waitMs);
+      if (isShuttingDown) return;
     }
   }
 }
@@ -128,7 +142,14 @@ async function startDependencyBootstrap() {
     markDegraded(err);
   }
 
-  if (updateRuntimeState && getRedisClient && mongoose.connection.readyState === 1) startSchedulers();
+  const redisClient = getRedisClient();
+  const mongoReady = mongoose.connection.readyState === 1;
+  const redisOpen = Boolean(redisClient?.isOpen);
+  if (mongoReady && redisOpen && !areSchedulersStarted()) {
+    startSchedulers();
+  } else {
+    logger.warn("[BOOT] Scheduler bootstrap skipped because DB/Redis is not ready.", { mongoReady, redisOpen });
+  }
   await startWorkerWithRetry();
 }
 

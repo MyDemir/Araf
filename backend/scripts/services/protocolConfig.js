@@ -2,6 +2,9 @@
 
 /**
  * Protocol Config Service — On-Chain Parametre Yükleyici
+ * - Hard-coded RPC fallback YOK.
+ * - Config yüklenemezse protocolConfig=null kalır.
+ * - getConfig() CONFIG_UNAVAILABLE fırlatır (endpoint 503 dönmelidir).
  */
 const { ethers } = require("ethers");
 const logger = require("../utils/logger");
@@ -34,18 +37,18 @@ async function loadProtocolConfig() {
       return protocolConfig;
     }
   } catch (err) {
-    logger.warn(`[Config] Redis önbellek okuma hatası: ${err.message}`);
+    logger.warn(`[Config] Redis önbellek okuma hatası (fatal değil): ${err.message}`);
   }
 
   const rpcUrl = process.env.BASE_RPC_URL;
   const contractAddress = process.env.ARAF_ESCROW_ADDRESS;
   if (!contractAddress || contractAddress === "0x0000000000000000000000000000000000000000") {
-    logger.warn("[Config] ARAF_ESCROW_ADDRESS tanımsız — CONFIG_UNAVAILABLE modu.");
+    logger.warn("[Config] ARAF_ESCROW_ADDRESS tanımsız; config yüklenemedi.");
     protocolConfig = null;
     return null;
   }
   if (!rpcUrl) {
-    if (process.env.NODE_ENV === "production") logger.error("[Config] CRITICAL: BASE_RPC_URL production'da zorunludur.");
+    logger.warn("[Config] BASE_RPC_URL tanımsız; config yüklenemedi.");
     protocolConfig = null;
     return null;
   }
@@ -53,22 +56,40 @@ async function loadProtocolConfig() {
   try {
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const contract = new ethers.Contract(contractAddress, CONFIG_ABI, provider);
-    const [makerT0,makerT1,makerT2,makerT3,makerT4,takerT0,takerT1,takerT2,takerT3,takerT4] = await Promise.all([
-      contract.MAKER_BOND_TIER0_BPS(),contract.MAKER_BOND_TIER1_BPS(),contract.MAKER_BOND_TIER2_BPS(),contract.MAKER_BOND_TIER3_BPS(),contract.MAKER_BOND_TIER4_BPS(),
-      contract.TAKER_BOND_TIER0_BPS(),contract.TAKER_BOND_TIER1_BPS(),contract.TAKER_BOND_TIER2_BPS(),contract.TAKER_BOND_TIER3_BPS(),contract.TAKER_BOND_TIER4_BPS(),
+
+    const [makerT0, makerT1, makerT2, makerT3, makerT4, takerT0, takerT1, takerT2, takerT3, takerT4] = await Promise.all([
+      contract.MAKER_BOND_TIER0_BPS(),
+      contract.MAKER_BOND_TIER1_BPS(),
+      contract.MAKER_BOND_TIER2_BPS(),
+      contract.MAKER_BOND_TIER3_BPS(),
+      contract.MAKER_BOND_TIER4_BPS(),
+      contract.TAKER_BOND_TIER0_BPS(),
+      contract.TAKER_BOND_TIER1_BPS(),
+      contract.TAKER_BOND_TIER2_BPS(),
+      contract.TAKER_BOND_TIER3_BPS(),
+      contract.TAKER_BOND_TIER4_BPS(),
     ]);
+
     const bpsToPercent = (bps) => Number(bps) / 100;
-    protocolConfig = { bondMap: {
-      0:{maker:bpsToPercent(makerT0),taker:bpsToPercent(takerT0),makerBps:Number(makerT0),takerBps:Number(takerT0)},
-      1:{maker:bpsToPercent(makerT1),taker:bpsToPercent(takerT1),makerBps:Number(makerT1),takerBps:Number(takerT1)},
-      2:{maker:bpsToPercent(makerT2),taker:bpsToPercent(takerT2),makerBps:Number(makerT2),takerBps:Number(takerT2)},
-      3:{maker:bpsToPercent(makerT3),taker:bpsToPercent(takerT3),makerBps:Number(makerT3),takerBps:Number(takerT3)},
-      4:{maker:bpsToPercent(makerT4),taker:bpsToPercent(takerT4),makerBps:Number(makerT4),takerBps:Number(takerT4)},
-    }};
-    try { await redis.setEx(CONFIG_CACHE_KEY, CONFIG_CACHE_TTL, JSON.stringify(protocolConfig)); } catch (err) { logger.warn(`[Config] Redis yazma hatası: ${err.message}`); }
+    protocolConfig = {
+      bondMap: {
+        0: { maker: bpsToPercent(makerT0), taker: bpsToPercent(takerT0), makerBps: Number(makerT0), takerBps: Number(takerT0) },
+        1: { maker: bpsToPercent(makerT1), taker: bpsToPercent(takerT1), makerBps: Number(makerT1), takerBps: Number(takerT1) },
+        2: { maker: bpsToPercent(makerT2), taker: bpsToPercent(takerT2), makerBps: Number(makerT2), takerBps: Number(takerT2) },
+        3: { maker: bpsToPercent(makerT3), taker: bpsToPercent(takerT3), makerBps: Number(makerT3), takerBps: Number(takerT3) },
+        4: { maker: bpsToPercent(makerT4), taker: bpsToPercent(takerT4), makerBps: Number(makerT4), takerBps: Number(takerT4) },
+      },
+    };
+
+    try {
+      await redis.setEx(CONFIG_CACHE_KEY, CONFIG_CACHE_TTL, JSON.stringify(protocolConfig));
+    } catch (err) {
+      logger.warn(`[Config] Redis yazma hatası (fatal değil): ${err.message}`);
+    }
+
     return protocolConfig;
   } catch (err) {
-    logger.error(`[Config] On-chain config yüklenemedi (degraded): ${err.message}`);
+    logger.error(`[Config] On-chain config yüklenemedi (RPC 429/SERVER_ERROR/timeout dahil): ${err.message}`);
     protocolConfig = null;
     return null;
   }

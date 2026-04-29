@@ -169,10 +169,9 @@ class EventWorker {
   async start() {
     logger.info("[Worker] Event listener başlatılıyor...");
     logger.info(`[Worker] EVENT_QUERY_BLOCK_RANGE=${BLOCK_BATCH_SIZE}`);
-    this.isRunning = true;
-    await this._connect();
-    this.lastError = null;
-    await this._replayMissedEvents();
+    try {
+      await this._connect();
+      await this._replayMissedEvents();
 
     // [TR] Replay tamamlandıktan sonra live polling başlangıç referansı güncel block olur.
     // [EN] After replay finishes, current block becomes the live polling baseline.
@@ -180,8 +179,16 @@ class EventWorker {
       this._lastLivePolledBlock = await this.provider.getBlockNumber();
     }
 
-    this._attachLiveListeners();
-    logger.info("[Worker] Event listener aktif.");
+      this._attachLiveListeners();
+      this.isRunning = true;
+      this.lastError = null;
+      logger.info("[Worker] Event listener aktif.");
+    } catch (err) {
+      this.isRunning = false;
+      this.lastError = err;
+      this._setState("degraded", "start başarısız");
+      throw err;
+    }
   }
 
   async stop() {
@@ -265,7 +272,13 @@ class EventWorker {
     if (!this.contract) return;
 
     const redis = getRedisClient();
-    const savedBlock = await redis.get(LAST_SAFE_BLOCK_KEY) ?? await redis.get(CHECKPOINT_KEY);
+    let savedBlock;
+    try {
+      savedBlock = await redis.get(LAST_SAFE_BLOCK_KEY) ?? await redis.get(CHECKPOINT_KEY);
+    } catch (err) {
+      this.lastError = err;
+      throw err;
+    }
     const toBlock = await this.provider.getBlockNumber();
     const fromBlock = this._resolveReplayStartBlock(savedBlock, toBlock);
 
@@ -435,6 +448,7 @@ class EventWorker {
         //      güvenli kabul edilmez. Aynı range daha sonra replay/live akışında yeniden ele alınır.
         this._seedAckStateForRange(from, to);
         this._markRangeUnsafe(from, to);
+        this.lastError = err;
         throw err;
       }
     }
@@ -600,7 +614,6 @@ class EventWorker {
       await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       await this._connect();
       this.lastError = null;
-    this.lastError = null;
       await this._replayMissedEvents();
 
       if (this.provider) {
@@ -614,6 +627,10 @@ class EventWorker {
 
     try {
       await this._reconnectPromise;
+    } catch (err) {
+      this.lastError = err;
+      this._setState("degraded", "reconnect başarısız");
+      throw err;
     } finally {
       this._reconnectPromise = null;
     }
