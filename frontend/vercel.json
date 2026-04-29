@@ -61,7 +61,7 @@
       "destination": "https://araf-protocol-backend.fly.dev/api/$1"
     },
     {
-      "source": "/((?!\.well-known/.*|.*\\..*).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
