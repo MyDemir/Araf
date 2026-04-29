@@ -6,6 +6,9 @@ const { isReady: isRedisReady, getRedisClient } = require("../config/redis");
 const CHECKPOINT_KEY = "worker:last_block";
 const LAST_SAFE_BLOCK_KEY = "worker:last_safe_block";
 const MAX_WORKER_LAG_BLOCKS = Number(process.env.WORKER_MAX_LAG_BLOCKS || 25);
+const HEALTH_PROVIDER_BLOCK_CACHE_MS = Number(process.env.HEALTH_PROVIDER_BLOCK_CACHE_MS || 15000);
+
+const providerReadinessCache = { lastCheckedAt: 0, lastCurrentBlock: null, lastProviderReady: false };
 
 const runtimeState = {
   serverListening: false,
@@ -40,13 +43,25 @@ async function getReadiness({ worker, provider } = {}) {
   let currentBlock = null;
   try {
     if (provider) {
-      currentBlock = await provider.getBlockNumber();
-      providerReady = Number.isInteger(currentBlock);
+      const now = Date.now();
+      if (now - providerReadinessCache.lastCheckedAt < HEALTH_PROVIDER_BLOCK_CACHE_MS) {
+        currentBlock = providerReadinessCache.lastCurrentBlock;
+        providerReady = providerReadinessCache.lastProviderReady;
+      } else {
+        currentBlock = await provider.getBlockNumber();
+        providerReady = Number.isInteger(currentBlock);
+        providerReadinessCache.lastCheckedAt = now;
+        providerReadinessCache.lastCurrentBlock = currentBlock;
+        providerReadinessCache.lastProviderReady = providerReady;
+      }
     } else {
       providerReady = Boolean(worker?.provider);
     }
   } catch {
     providerReady = false;
+    providerReadinessCache.lastCheckedAt = Date.now();
+    providerReadinessCache.lastCurrentBlock = null;
+    providerReadinessCache.lastProviderReady = false;
   }
 
   const requiredConfig = ["MONGODB_URI", "REDIS_URL", "JWT_SECRET", "SIWE_DOMAIN"];
