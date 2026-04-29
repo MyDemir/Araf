@@ -288,7 +288,17 @@ class EventWorker {
         } catch (err) {
           logger.warn(`[Worker] Replay: ${eventName} sorgusu başarısız (${from}-${to}): ${err.message}`);
           batchSuccess = false;
+          break;
         }
+      }
+
+      // [TR] Replay toplama aşamasında queryFilter hatası olursa kısmi event işleme yapılmaz.
+      //      Böylece aynı batch'te başarıyla çekilmiş event'lerin duplicate side-effect üretmesi engellenir.
+      // [EN] If queryFilter fails during replay collection, skip processing all events in this batch
+      //      to avoid duplicate side-effects from partially collected results on the next replay.
+      if (!batchSuccess) {
+        logger.warn(`[Worker] Replay batch durduruldu: ${from}-${to} queryFilter hatası nedeniyle event işlenmedi.`);
+        break;
       }
 
       allEvents.sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
