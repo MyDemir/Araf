@@ -64,6 +64,54 @@ describe('EventWorker polling and production guard hardening', () => {
     expect(() => worker._resolveReplayStartBlock(null, 100)).toThrow(/KRİTİK/);
   });
 
+
+  test('start keeps development dry-run by skipping live bootstrap when provider/contract missing', async () => {
+    process.env.NODE_ENV = 'development';
+    worker._connect = jest.fn().mockResolvedValue(undefined);
+    worker._replayMissedEvents = jest.fn().mockResolvedValue(undefined);
+    worker.provider = null;
+    worker.contract = null;
+    const getCurrentSpy = jest.spyOn(worker, '_getCurrentBlock');
+    const startPollingSpy = jest.spyOn(worker, '_startLivePolling');
+
+    await worker.start();
+
+    expect(getCurrentSpy).not.toHaveBeenCalled();
+    expect(startPollingSpy).not.toHaveBeenCalled();
+    expect(worker.isRunning).toBe(true);
+  });
+
+  test('reconnect skips live bootstrap when provider/contract missing after reconnect', async () => {
+    jest.useFakeTimers();
+    worker.provider = { removeAllListeners: jest.fn(), destroy: jest.fn().mockResolvedValue(undefined) };
+    worker._connect = jest.fn().mockImplementation(() => { worker.provider = null; worker.contract = null; });
+    worker._replayMissedEvents = jest.fn().mockResolvedValue(undefined);
+    const startPollingSpy = jest.spyOn(worker, '_startLivePolling');
+    const getCurrentSpy = jest.spyOn(worker, '_getCurrentBlock');
+    worker._sleep = jest.fn().mockResolvedValue(undefined);
+
+    const reconnectPromise = worker._reconnect();
+    await jest.advanceTimersByTimeAsync(5000);
+    await reconnectPromise;
+
+    expect(startPollingSpy).not.toHaveBeenCalled();
+    expect(getCurrentSpy).not.toHaveBeenCalledWith('reconnect-bootstrap');
+    jest.useRealTimers();
+  });
+
+  test('runLivePollCycle preserves checkpoint-interval replay safety', async () => {
+    worker.provider = { getBlockNumber: jest.fn().mockResolvedValue(100) };
+    worker._lastLivePolledBlock = 90;
+    worker._lastSafeCheckpointBlock = 40;
+    worker._pollLiveRange = jest.fn().mockResolvedValue(undefined);
+    worker._advanceSafeCheckpointFromAcks = jest.fn().mockResolvedValue(undefined);
+    worker._replayMissedEvents = jest.fn().mockResolvedValue(undefined);
+
+    await worker._runLivePollCycle();
+
+    expect(worker._replayMissedEvents).toHaveBeenCalledTimes(1);
+  });
+
   test('uses production default query block range 500 and env override for GET_LOGS_MAX_RETRIES', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../scripts/services/eventListener.js'), 'utf8');
     expect(source).toContain('DEFAULT_EVENT_QUERY_BLOCK_RANGE_PROD = 500');

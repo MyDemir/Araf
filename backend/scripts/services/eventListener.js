@@ -196,10 +196,18 @@ class EventWorker {
       await this._connect();
       await this._replayMissedEvents();
 
-    // [TR] Replay tamamlandıktan sonra live polling başlangıç referansı güncel block olur.
-    // [EN] After replay finishes, current block becomes the live polling baseline.
-    this._lastLivePolledBlock = await this._getCurrentBlock("live-bootstrap");
-      this._startLivePolling();
+      // [TR] Development dry-run modunda provider/contract boş olabilir.
+      //      Bu durumda live polling başlatılmaz; production zaten _connect() içinde fail eder.
+      // [EN] Provider/contract may be absent in development dry-run mode.
+      //      In that case we skip live polling; production already fails in _connect().
+      if (this.provider && this.contract) {
+        // [TR] Replay sonrası live cursor güncel block'a sabitlenir.
+        // [EN] After replay, live cursor is bootstrapped at current block.
+        this._lastLivePolledBlock = await this._getCurrentBlock("live-bootstrap");
+        this._startLivePolling();
+      } else {
+        logger.warn("[Worker] Provider/contract yok; live polling başlatılmadı.");
+      }
       this.isRunning = true;
       this.lastError = null;
       logger.info("[Worker] Event listener aktif.");
@@ -389,6 +397,18 @@ class EventWorker {
       }
 
       await this._advanceSafeCheckpointFromAcks(safeToBlock);
+
+      // [TR] Uzun süreli canlı akışta ack/checkpoint sapmalarını düzeltmek için
+      //      periyodik replay güvenliği korunur.
+      // [EN] Preserve periodic replay safety to heal ack/checkpoint drift in long-running live mode.
+      if (!this._replayInProgress && (safeToBlock - this._lastSafeCheckpointBlock >= CHECKPOINT_INTERVAL_BLOCKS)) {
+        this._replayInProgress = true;
+        try {
+          await this._replayMissedEvents();
+        } finally {
+          this._replayInProgress = false;
+        }
+      }
     } catch (err) {
       this.lastError = err;
       logger.error(`[Worker] Live interval poll hatası: ${err.message}`);
@@ -689,8 +709,12 @@ class EventWorker {
       this.lastError = null;
       await this._replayMissedEvents();
 
-      this._lastLivePolledBlock = await this._getCurrentBlock("reconnect-bootstrap");
-      this._startLivePolling();
+      if (this.provider && this.contract) {
+        this._lastLivePolledBlock = await this._getCurrentBlock("reconnect-bootstrap");
+        this._startLivePolling();
+      } else {
+        logger.warn("[Worker] Provider/contract yok; reconnect sonrası live polling başlatılmadı.");
+      }
     })();
 
     try {
