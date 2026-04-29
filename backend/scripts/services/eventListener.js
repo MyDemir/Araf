@@ -163,14 +163,15 @@ class EventWorker {
     // [EN] Live path now uses block-range polling instead of contract.on(...).
     this._livePollInProgress = false;
     this._lastLivePolledBlock = 0;
+    this.lastError = null;
   }
 
   async start() {
     logger.info("[Worker] Event listener başlatılıyor...");
     logger.info(`[Worker] EVENT_QUERY_BLOCK_RANGE=${BLOCK_BATCH_SIZE}`);
-    this.isRunning = true;
-    await this._connect();
-    await this._replayMissedEvents();
+    try {
+      await this._connect();
+      await this._replayMissedEvents();
 
     // [TR] Replay tamamlandıktan sonra live polling başlangıç referansı güncel block olur.
     // [EN] After replay finishes, current block becomes the live polling baseline.
@@ -178,8 +179,16 @@ class EventWorker {
       this._lastLivePolledBlock = await this.provider.getBlockNumber();
     }
 
-    this._attachLiveListeners();
-    logger.info("[Worker] Event listener aktif.");
+      this._attachLiveListeners();
+      this.isRunning = true;
+      this.lastError = null;
+      logger.info("[Worker] Event listener aktif.");
+    } catch (err) {
+      this.isRunning = false;
+      this.lastError = err;
+      this._setState("degraded", "start başarısız");
+      throw err;
+    }
   }
 
   async stop() {
@@ -207,8 +216,7 @@ class EventWorker {
 
     if (!contractAddress || contractAddress === "0x0000000000000000000000000000000000000000") {
       if (isProduction) {
-        logger.error("[Worker] KRİTİK: ARAF_ESCROW_ADDRESS tanımlı değil. Durduruluyor.");
-        process.exit(1);
+        throw new Error("[Worker] KRİTİK: ARAF_ESCROW_ADDRESS tanımlı değil.");
       }
       logger.warn("[Worker] Kontrat adresi yok — Worker kuru çalışma modunda (development).");
       return;
@@ -264,7 +272,13 @@ class EventWorker {
     if (!this.contract) return;
 
     const redis = getRedisClient();
-    const savedBlock = await redis.get(LAST_SAFE_BLOCK_KEY) ?? await redis.get(CHECKPOINT_KEY);
+    let savedBlock;
+    try {
+      savedBlock = await redis.get(LAST_SAFE_BLOCK_KEY) ?? await redis.get(CHECKPOINT_KEY);
+    } catch (err) {
+      this.lastError = err;
+      throw err;
+    }
     const toBlock = await this.provider.getBlockNumber();
     const fromBlock = this._resolveReplayStartBlock(savedBlock, toBlock);
 
@@ -371,6 +385,7 @@ class EventWorker {
           }
         }
       } catch (err) {
+        this.lastError = err;
         logger.error(`[Worker] Live block-range poll hatası: ${err.message}`);
       } finally {
         this._livePollInProgress = false;
@@ -378,6 +393,7 @@ class EventWorker {
     });
 
     this.provider.on("error", async (err) => {
+      this.lastError = err;
       logger.error(`[Worker] Provider hatası: ${err.message}. Yeniden bağlanılıyor...`);
       await this._reconnect();
     });
@@ -432,6 +448,7 @@ class EventWorker {
         //      güvenli kabul edilmez. Aynı range daha sonra replay/live akışında yeniden ele alınır.
         this._seedAckStateForRange(from, to);
         this._markRangeUnsafe(from, to);
+        this.lastError = err;
         throw err;
       }
     }
@@ -596,6 +613,7 @@ class EventWorker {
 
       await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       await this._connect();
+      this.lastError = null;
       await this._replayMissedEvents();
 
       if (this.provider) {
@@ -609,6 +627,10 @@ class EventWorker {
 
     try {
       await this._reconnectPromise;
+    } catch (err) {
+      this.lastError = err;
+      this._setState("degraded", "reconnect başarısız");
+      throw err;
     } finally {
       this._reconnectPromise = null;
     }
@@ -1165,6 +1187,16 @@ worker.reprocessDLQEntry = async function reprocessDLQEntry(entry) {
     logger.error(`[Worker] DLQ re-drive başarısız: ${entry.eventName} tx=${entry.txHash} err=${err.message}`);
     return false;
   }
+};
+
+
+worker.getStatus = function getStatus() {
+  return {
+    state: this._state,
+    lastError: this.lastError ? { message: this.lastError.message } : null,
+    isRunning: this.isRunning,
+    lastSafeCheckpointBlock: this._lastSafeCheckpointBlock,
+  };
 };
 
 module.exports = worker;
