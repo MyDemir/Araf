@@ -80,12 +80,15 @@ jobs:
           [[ "$USDT" =~ $ADDRESS_RE ]] || { echo "BASE_SEPOLIA_USDT_ADDRESS is missing or invalid."; exit 1; }
           [[ "$USDC" =~ $ADDRESS_RE ]] || { echo "BASE_SEPOLIA_USDC_ADDRESS is missing or invalid."; exit 1; }
           [[ "$DEPLOY_BLOCK" =~ ^[0-9]+$ ]] || { echo "ARAF_DEPLOYMENT_BLOCK is missing or invalid."; exit 1; }
+          [[ "$DEPLOY_BLOCK" != "0" ]] || { echo "ARAF_DEPLOYMENT_BLOCK cannot be 0 for production runtime deploy."; exit 1; }
           [[ "$CHAIN_ID" == "84532" ]] || { echo "This workflow is locked to Base Sepolia chainId 84532."; exit 1; }
 
           echo "ESCROW=$ESCROW" >> "$GITHUB_ENV"
           echo "USDT=$USDT" >> "$GITHUB_ENV"
           echo "USDC=$USDC" >> "$GITHUB_ENV"
           echo "DEPLOY_BLOCK=$DEPLOY_BLOCK" >> "$GITHUB_ENV"
+          WORKER_START_BLOCK=$(( DEPLOY_BLOCK > 50 ? DEPLOY_BLOCK - 50 : DEPLOY_BLOCK ))
+          echo "WORKER_START_BLOCK=$WORKER_START_BLOCK" >> "$GITHUB_ENV"
 
       - name: Validate backend config
         if: ${{ inputs.deploy_backend }}
@@ -142,9 +145,14 @@ jobs:
             BASE_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
             BASE_SEPOLIA_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
             BASE_WS_RPC_URL="${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}" \
-            EVENT_QUERY_BLOCK_RANGE="10" \
+            EVENT_POLL_INTERVAL_MS="60000" \
+            EVENT_CONFIRMATIONS="2" \
+            EVENT_QUERY_BLOCK_RANGE="500" \
+            GET_LOGS_MAX_RETRIES="3" \
+            HEALTH_PROVIDER_BLOCK_CACHE_MS="15000" \
             ARAF_ESCROW_ADDRESS="$ESCROW" \
             ARAF_DEPLOYMENT_BLOCK="$DEPLOY_BLOCK" \
+            WORKER_START_BLOCK="$WORKER_START_BLOCK" \
             CHAIN_ID="$CHAIN_ID" \
             SIWE_CHAIN_ID="$CHAIN_ID" \
             TREASURY_ADDRESS="${{ secrets.TREASURY_ADDRESS }}" \
@@ -221,4 +229,10 @@ jobs:
             echo "- VITE_USDC_ADDRESS: $USDC"
             echo "- VITE_ALLOWED_CHAIN_ID: $CHAIN_ID"
             echo "- ARAF_DEPLOYMENT_BLOCK: $DEPLOY_BLOCK"
+            echo "- EVENT_POLL_INTERVAL_MS: 60000"
+            echo "- EVENT_CONFIRMATIONS: 2"
+            echo "- EVENT_QUERY_BLOCK_RANGE: 500"
+            echo "- GET_LOGS_MAX_RETRIES: 3"
+            echo "- HEALTH_PROVIDER_BLOCK_CACHE_MS: 15000"
+            echo "- WORKER_START_BLOCK: $WORKER_START_BLOCK"
           } >> "$GITHUB_STEP_SUMMARY"

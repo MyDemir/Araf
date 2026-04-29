@@ -99,12 +99,17 @@ jobs:
           test -n "$USDC" || { echo "Missing VITE_USDC_ADDRESS"; exit 1; }
           test -n "$CHAIN_ID" || { echo "Missing VITE_ALLOWED_CHAIN_ID"; exit 1; }
           test -n "$DEPLOY_BLOCK" || { echo "Missing ARAF_DEPLOYMENT_BLOCK"; exit 1; }
+          [[ "$DEPLOY_BLOCK" =~ ^[0-9]+$ ]] || { echo "ARAF_DEPLOYMENT_BLOCK must be numeric."; exit 1; }
+          [[ "$DEPLOY_BLOCK" != "0" ]] || { echo "ARAF_DEPLOYMENT_BLOCK cannot be 0 in production. deploy.js must print the real deployment block."; exit 1; }
+
+          WORKER_START_BLOCK=$(( DEPLOY_BLOCK > 50 ? DEPLOY_BLOCK - 50 : DEPLOY_BLOCK ))
 
           echo "ESCROW=$ESCROW" >> "$GITHUB_ENV"
           echo "USDT=$USDT" >> "$GITHUB_ENV"
           echo "USDC=$USDC" >> "$GITHUB_ENV"
           echo "CHAIN_ID=$CHAIN_ID" >> "$GITHUB_ENV"
           echo "DEPLOY_BLOCK=$DEPLOY_BLOCK" >> "$GITHUB_ENV"
+          echo "WORKER_START_BLOCK=$WORKER_START_BLOCK" >> "$GITHUB_ENV"
 
       - name: Setup Fly CLI
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -127,9 +132,14 @@ jobs:
             MASTER_ENCRYPTION_KEY="${{ secrets.MASTER_ENCRYPTION_KEY }}" \
             BASE_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
             BASE_WS_RPC_URL="${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}" \
-            EVENT_QUERY_BLOCK_RANGE="10" \
+            EVENT_POLL_INTERVAL_MS="60000" \
+            EVENT_CONFIRMATIONS="2" \
+            EVENT_QUERY_BLOCK_RANGE="500" \
+            GET_LOGS_MAX_RETRIES="3" \
+            HEALTH_PROVIDER_BLOCK_CACHE_MS="15000" \
             ARAF_ESCROW_ADDRESS="$ESCROW" \
             ARAF_DEPLOYMENT_BLOCK="$DEPLOY_BLOCK" \
+            WORKER_START_BLOCK="$WORKER_START_BLOCK" \
             CHAIN_ID="84532" \
             SIWE_CHAIN_ID="84532" \
             TREASURY_ADDRESS="${{ secrets.TREASURY_ADDRESS }}" \
@@ -157,6 +167,12 @@ jobs:
           echo "VITE_USDC_ADDRESS=$USDC"
           echo "VITE_ALLOWED_CHAIN_ID=84532"
           echo "ARAF_DEPLOYMENT_BLOCK=$DEPLOY_BLOCK"
+          echo "EVENT_POLL_INTERVAL_MS=60000"
+          echo "EVENT_CONFIRMATIONS=2"
+          echo "EVENT_QUERY_BLOCK_RANGE=500"
+          echo "GET_LOGS_MAX_RETRIES=3"
+          echo "HEALTH_PROVIDER_BLOCK_CACHE_MS=15000"
+          echo "WORKER_START_BLOCK=$WORKER_START_BLOCK"
 
       - name: Check backend health
         run: |

@@ -71,13 +71,29 @@ const LAST_SAFE_BLOCK_KEY = "worker:last_safe_block";
 const DLQ_KEY = "worker:dlq";
 const RETRY_DELAY_MS = 5_000;
 const MAX_RETRIES = 3;
-const DEFAULT_EVENT_QUERY_BLOCK_RANGE = 10;
-const GET_LOGS_MAX_RETRIES = 5;
+const DEFAULT_EVENT_QUERY_BLOCK_RANGE_PROD = 500;
+const DEFAULT_EVENT_QUERY_BLOCK_RANGE_DEV = 10;
+const GET_LOGS_MAX_RETRIES_PROD = 3;
+const GET_LOGS_MAX_RETRIES_DEV = 5;
 const GET_LOGS_BACKOFF_MS = [1500, 3000, 6000, 12000, 24000];
+
+function _readPositiveIntEnv(name, productionDefault, developmentDefault) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") {
+    return process.env.NODE_ENV === "production" ? productionDefault : developmentDefault;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`[Worker] KRİTİK: ${name} pozitif integer olmalıdır. Mevcut değer: ${raw}`);
+  }
+
+  return parsed;
+}
 
 function _readEventQueryBlockRange() {
   const raw = process.env.EVENT_QUERY_BLOCK_RANGE;
-  if (raw == null || raw === "") return DEFAULT_EVENT_QUERY_BLOCK_RANGE;
+  if (raw == null || raw === "") return process.env.NODE_ENV === "production" ? DEFAULT_EVENT_QUERY_BLOCK_RANGE_PROD : DEFAULT_EVENT_QUERY_BLOCK_RANGE_DEV;
 
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -90,6 +106,7 @@ function _readEventQueryBlockRange() {
 }
 
 const BLOCK_BATCH_SIZE = _readEventQueryBlockRange();
+const GET_LOGS_MAX_RETRIES = _readPositiveIntEnv("GET_LOGS_MAX_RETRIES", GET_LOGS_MAX_RETRIES_PROD, GET_LOGS_MAX_RETRIES_DEV);
 const CHECKPOINT_INTERVAL_BLOCKS = 50;
 
 // reputation_history sınırsız büyümesin diye üst sınır tutulur.
@@ -164,24 +181,25 @@ class EventWorker {
     // [TR] Live path artık contract.on(...) yerine block-range polling kullanır.
     // [EN] Live path now uses block-range polling instead of contract.on(...).
     this._livePollInProgress = false;
+    this._livePollTimer = null;
+    this._livePollIntervalMs = _readPositiveIntEnv("EVENT_POLL_INTERVAL_MS", 60000, 5000);
+    this._eventConfirmations = _readPositiveIntEnv("EVENT_CONFIRMATIONS", 2, 1);
+    this._rpcMetrics = { getLogs: 0, getBlockNumber: 0 };
     this._lastLivePolledBlock = 0;
     this.lastError = null;
   }
 
   async start() {
     logger.info("[Worker] Event listener başlatılıyor...");
-    logger.info(`[Worker] EVENT_QUERY_BLOCK_RANGE=${BLOCK_BATCH_SIZE}`);
+    logger.info(`[Worker] EVENT_POLL_INTERVAL_MS=${this._livePollIntervalMs} EVENT_CONFIRMATIONS=${this._eventConfirmations} EVENT_QUERY_BLOCK_RANGE=${BLOCK_BATCH_SIZE}`);
     try {
       await this._connect();
       await this._replayMissedEvents();
 
     // [TR] Replay tamamlandıktan sonra live polling başlangıç referansı güncel block olur.
     // [EN] After replay finishes, current block becomes the live polling baseline.
-    if (this.provider) {
-      this._lastLivePolledBlock = await this.provider.getBlockNumber();
-    }
-
-      this._attachLiveListeners();
+    this._lastLivePolledBlock = await this._getCurrentBlock("live-bootstrap");
+      this._startLivePolling();
       this.isRunning = true;
       this.lastError = null;
       logger.info("[Worker] Event listener aktif.");
@@ -195,9 +213,8 @@ class EventWorker {
 
   async stop() {
     this.isRunning = false;
-    if (this.provider) {
-      this.provider.removeAllListeners();
-    }
+    this._stopLivePolling();
+    if (this.provider) this.provider.removeAllListeners();
     this._listenersAttached = false;
     this._livePollInProgress = false;
     this._setState("stopped", "worker stop çağrıldı");
@@ -328,66 +345,7 @@ class EventWorker {
   }
 
   _attachLiveListeners() {
-    if (!this.contract || this._listenersAttached) return;
-
-    // [TR] Canlı dinleme artık contract.on(...) ile tek tek event abonesi açmaz.
-    //      Bunun yerine yeni block sinyalini tetik olarak kullanır ve son işlenen
-    //      bloktan güncel bloğa kadar olan aralığı tek getLogs(...) çağrısı ile tarar.
-    //
-    // [EN] Live mode no longer opens per-event contract.on(...) subscriptions.
-    //      Instead, each new block is treated as a trigger and the worker scans
-    //      the full block range from the last processed block to the current block
-    //      via a single getLogs(...) call.
-    //
-    // Bu yaklaşım:
-    // - replay ve live path'i aynı veri toplama mantığına yaklaştırır
-    // - missed event riskini azaltır
-    // - provider subscriber/filter-id kaynaklı kırılganlığı düşürür
-    this.provider.on("block", async (blockNumber) => {
-      if (this._livePollInProgress) {
-        logger.debug(`[Worker] Live poll zaten çalışıyor — block=${blockNumber} için yeni tetik atlandı.`);
-        return;
-      }
-
-      this._livePollInProgress = true;
-
-      try {
-        await this._updateSeenBlockIfHigher(blockNumber);
-
-        const fromBlock = this._lastLivePolledBlock + 1;
-        const toBlock = blockNumber;
-
-        if (fromBlock <= toBlock) {
-          await this._pollLiveRange(fromBlock, toBlock);
-
-          // [TR] Range başarıyla sorgulanıp işlendiği anda live cursor ilerletilir.
-          //      Kısmi event hataları _markBlockUnsafe ile checkpoint'i durdurur;
-          //      ama aynı range'i her block'ta tekrar sorgulamak duplicate baskısı yaratır.
-          this._lastLivePolledBlock = toBlock;
-        }
-
-        logger.debug(
-          `[Worker][Metrics] queue_depth=${this._blockAcks.size} last_seen_block=${this._lastSeenBlock} last_safe_block=${this._lastSafeCheckpointBlock}`
-        );
-
-        const finalizedUpTo = blockNumber - 1;
-        await this._advanceSafeCheckpointFromAcks(finalizedUpTo);
-
-        if (!this._replayInProgress && (blockNumber - this._lastSafeCheckpointBlock >= CHECKPOINT_INTERVAL_BLOCKS)) {
-          this._replayInProgress = true;
-          try {
-            await this._replayMissedEvents();
-          } finally {
-            this._replayInProgress = false;
-          }
-        }
-      } catch (err) {
-        this.lastError = err;
-        logger.error(`[Worker] Live block-range poll hatası: ${err.message}`);
-      } finally {
-        this._livePollInProgress = false;
-      }
-    });
+    if (!this.provider || this._listenersAttached) return;
 
     this.provider.on("error", async (err) => {
       this.lastError = err;
@@ -396,7 +354,57 @@ class EventWorker {
     });
 
     this._listenersAttached = true;
-    this._setState("live", "canlı block-range listener bağlandı");
+  }
+
+  _stopLivePolling() {
+    if (this._livePollTimer) {
+      clearInterval(this._livePollTimer);
+      this._livePollTimer = null;
+    }
+  }
+
+  _startLivePolling() {
+    this._stopLivePolling();
+    this._attachLiveListeners();
+    this._livePollTimer = setInterval(() => {
+      void this._runLivePollCycle();
+    }, this._livePollIntervalMs);
+    this._setState("live", "canlı interval polling başlatıldı");
+  }
+
+  async _runLivePollCycle() {
+    if (this._livePollInProgress) return;
+    this._livePollInProgress = true;
+
+    try {
+      const latestBlock = await this._getCurrentBlock("live-poll");
+      await this._updateSeenBlockIfHigher(latestBlock);
+      const safeToBlock = latestBlock - this._eventConfirmations;
+      const fromBlock = this._lastLivePolledBlock + 1;
+
+      if (fromBlock <= safeToBlock) {
+        logger.debug(`[Worker] Live poll range=${fromBlock}-${safeToBlock} metrics=getLogs:${this._rpcMetrics.getLogs},getBlockNumber:${this._rpcMetrics.getBlockNumber}`);
+        await this._pollLiveRange(fromBlock, safeToBlock);
+        this._lastLivePolledBlock = safeToBlock;
+      }
+
+      await this._advanceSafeCheckpointFromAcks(safeToBlock);
+    } catch (err) {
+      this.lastError = err;
+      logger.error(`[Worker] Live interval poll hatası: ${err.message}`);
+    } finally {
+      this._livePollInProgress = false;
+    }
+  }
+
+  async _getCurrentBlock(context = "unknown") {
+    try {
+      this._rpcMetrics.getBlockNumber += 1;
+      return await this.provider.getBlockNumber();
+    } catch (err) {
+      logger.error(`[Worker] getBlockNumber başarısız context=${context} err=${err.message}`);
+      throw err;
+    }
   }
 
   // [TR] Belirli block aralığındaki event'leri canlı modda toplar ve işler.
@@ -462,6 +470,7 @@ class EventWorker {
     let lastError;
     for (let attempt = 1; attempt <= GET_LOGS_MAX_RETRIES; attempt += 1) {
       try {
+        this._rpcMetrics.getLogs += 1;
         return await this.provider.getLogs(filter);
       } catch (err) {
         lastError = err;
@@ -471,7 +480,7 @@ class EventWorker {
         const baseDelay = GET_LOGS_BACKOFF_MS[attempt - 1] ?? GET_LOGS_BACKOFF_MS[GET_LOGS_BACKOFF_MS.length - 1];
         const jitter = Math.floor(Math.random() * 251);
         const delayMs = baseDelay + jitter;
-        logger.warn(`[Worker] getLogs rate limited, retrying... context=${context} range=${filter.fromBlock}-${filter.toBlock} attempt=${attempt}/${GET_LOGS_MAX_RETRIES} waitMs=${delayMs}`);
+        logger.warn(`[Worker] getLogs rate limited, retrying... context=${context} range=${filter.fromBlock}-${filter.toBlock} attempt=${attempt} maxAttempts=${GET_LOGS_MAX_RETRIES} waitMs=${delayMs}`);
         await this._sleep(delayMs);
       }
     }
@@ -580,6 +589,9 @@ class EventWorker {
     }
 
     const configuredStart = Number(configuredStartRaw);
+    if (process.env.NODE_ENV === "production" && (!Number.isInteger(configuredStart) || configuredStart <= 0)) {
+      throw new Error("[Worker] KRİTİK: production'da ARAF_DEPLOYMENT_BLOCK/WORKER_START_BLOCK 0 olamaz. Gerçek deploy block girilmelidir.");
+    }
     if (!Number.isInteger(configuredStart) || configuredStart < 0) {
       throw new Error(`[Worker] Geçersiz başlangıç bloğu: ${configuredStartRaw}.`);
     }
@@ -656,6 +668,7 @@ class EventWorker {
 
       // Reconnect öncesi eski provider mutlaka temizlenir.
       // Bu, zombi WebSocket birikmesini engeller.
+      this._stopLivePolling();
       if (this.provider) {
         try {
           this.provider.removeAllListeners();
@@ -676,13 +689,8 @@ class EventWorker {
       this.lastError = null;
       await this._replayMissedEvents();
 
-      if (this.provider) {
-        this._lastLivePolledBlock = await this.provider.getBlockNumber();
-      }
-
-      if (this.contract) {
-        this._attachLiveListeners();
-      }
+      this._lastLivePolledBlock = await this._getCurrentBlock("reconnect-bootstrap");
+      this._startLivePolling();
     })();
 
     try {
