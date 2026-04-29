@@ -34,7 +34,7 @@ const { runReputationDecay } = require("./jobs/reputationDecay");
 // [EN] Periodic job that saves daily protocol stats to MongoDB
 const { runStatsSnapshot } = require("./jobs/statsSnapshot");
 const { runPendingListingCleanup } = require("./jobs/cleanupPendingListings");
-const { getReadiness, getLiveness } = require("./services/health");
+const { getReadiness, getLiveness, updateRuntimeState, markDegraded, clearDegradedIfReady } = require("./services/health");
 const {
   runReceiptCleanup,
   runPIISnapshotCleanup,
@@ -163,7 +163,15 @@ async function bootstrap() {
       process.exit(exitCode);
     }, FATAL_EXIT_TIMEOUT_MS);
 
-    try {
+    // [TR] Fly uyumluluğu: liveness endpoint'leri ve server listen, bağımlılıklardan önce açılır.
+  // [EN] Fly compatibility: liveness routes and listen are opened before dependencies.
+  app.get("/health", (req, res) => res.json(getLiveness()));
+  app.get("/ready", async (req, res) => {
+    const readiness = await getReadiness({ worker, provider: worker.provider });
+    return res.status(readiness.ok ? 200 : 503).json(readiness);
+  });
+
+  try {
       if (server && server.listening) {
         await new Promise((resolve) => server.close(resolve));
         logger.warn("[ORCHESTRATOR] Yeni istek kabulü durduruldu (server.close).");
@@ -241,13 +249,16 @@ async function bootstrap() {
       logger.warn("[SECURITY] COOKIE_SAMESITE=none dev ortamında HTTPS gerektirir; local HTTP'de cookie yazımı başarısız olabilir.");
     }
 
-    await connectDB();
-    await connectRedis();
-    logger.info("MongoDB ve Redis bağlantıları başarıyla sağlandı.");
+    try { await connectDB(); updateRuntimeState?.({ dbReady: true }); } catch (err) { markDegraded?.(err); }
+    try { await connectRedis(); updateRuntimeState?.({ redisReady: true }); } catch (err) { markDegraded?.(err); }
+    logger.info("MongoDB ve Redis bağlantı bootstrap adımı tamamlandı.");
 
-    await loadProtocolConfig();
+    const cfg = await loadProtocolConfig();
+    updateRuntimeState?.({ protocolConfigReady: Boolean(cfg) });
 
     await worker.start();
+    updateRuntimeState?.({ workerReady: true });
+    clearDegradedIfReady?.();
     logger.info("Event Listener (Zincir Dinleyici) aktif: Base L2 ağı izleniyor.");
 
     // [TR] DLQ monitörü — her 60 saniyede başarısız event'leri kontrol eder
@@ -312,12 +323,6 @@ async function bootstrap() {
     app.use("/api/stats",    statsRoutes);
     app.use("/api/receipts", receiptRoutes);
 
-    app.get("/health", (req, res) => res.json(getLiveness()));
-    app.get("/ready", async (req, res) => {
-      const readiness = await getReadiness({ worker, provider: worker.provider });
-      return res.status(readiness.ok ? 200 : 503).json(readiness);
-    });
-
     app.use((req, res) => res.status(404).json({ error: "İstenen endpoint bulunamadı" }));
 
     app.use(globalErrorHandler);
@@ -335,8 +340,7 @@ async function bootstrap() {
     process.on("SIGINT",  () => shutdown({ signal: "SIGINT", exitCode: 0 }));
 
   } catch (err) {
-    logger.error("Uygulama başlatılırken kritik hata oluştu:", err);
-    process.exit(1);
+    logger.error("[BOOT] Dependency bootstrap hatası (degraded mode):", err);
   }
 }
 

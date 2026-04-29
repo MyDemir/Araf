@@ -207,8 +207,7 @@ class EventWorker {
 
     if (!contractAddress || contractAddress === "0x0000000000000000000000000000000000000000") {
       if (isProduction) {
-        logger.error("[Worker] KRİTİK: ARAF_ESCROW_ADDRESS tanımlı değil. Durduruluyor.");
-        process.exit(1);
+        throw new Error("[Worker] KRİTİK: ARAF_ESCROW_ADDRESS tanımlı değil.");
       }
       logger.warn("[Worker] Kontrat adresi yok — Worker kuru çalışma modunda (development).");
       return;
@@ -1165,6 +1164,16 @@ worker.reprocessDLQEntry = async function reprocessDLQEntry(entry) {
     logger.error(`[Worker] DLQ re-drive başarısız: ${entry.eventName} tx=${entry.txHash} err=${err.message}`);
     return false;
   }
+};
+
+
+worker.getStatus = function getStatus() {
+  return {
+    state: this._state,
+    lastError: this.lastError ? { message: this.lastError.message } : null,
+    isRunning: this.isRunning,
+    lastSafeCheckpointBlock: this._lastSafeCheckpointBlock,
+  };
 };
 
 module.exports = worker;

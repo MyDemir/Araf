@@ -10,6 +10,11 @@ const LAST_SAFE_BLOCK_KEY = "worker:last_safe_block";
 // [EN] Max acceptable worker lag in blocks before readiness turns false.
 const MAX_WORKER_LAG_BLOCKS = Number(process.env.WORKER_MAX_LAG_BLOCKS || 25);
 
+const runtimeState = { serverListening:false, dbReady:false, redisReady:false, protocolConfigReady:false, workerReady:false, lastStartupError:null, lastWorkerError:null, degraded:false };
+const updateRuntimeState=(patch={})=>Object.assign(runtimeState,patch);
+const markDegraded=(err, {worker=false}={})=>{ runtimeState.degraded=true; if(worker) runtimeState.lastWorkerError={message:err?.message||String(err)}; else runtimeState.lastStartupError={message:err?.message||String(err)}; };
+const clearDegradedIfReady=()=>{ runtimeState.degraded=!(runtimeState.serverListening&&runtimeState.dbReady&&runtimeState.redisReady&&runtimeState.protocolConfigReady&&runtimeState.workerReady); };
+
 async function getReadiness({ worker, provider } = {}) {
   const isProduction = process.env.NODE_ENV === "production";
   const mongoReady = mongoose.connection.readyState === 1;
@@ -185,4 +190,4 @@ function getLiveness() {
   return { status: "ok", timestamp: new Date().toISOString() };
 }
 
-module.exports = { getReadiness, getLiveness };
+module.exports = { getReadiness, getLiveness, updateRuntimeState, markDegraded, clearDegradedIfReady };
