@@ -8,15 +8,23 @@
       "headers": [
         {
           "key": "Content-Type",
-          "value": "application/vnd.farcaster.snap+json; charset=utf-8"
+          "value": "application/json; charset=utf-8"
         },
         {
           "key": "Access-Control-Allow-Origin",
           "value": "*"
         },
         {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Accept"
+        },
+        {
           "key": "Cache-Control",
-          "value": "public, max-age=300, s-maxage=300"
+          "value": "public, max-age=60, s-maxage=60"
         },
         {
           "key": "X-Content-Type-Options",
@@ -29,11 +37,11 @@
       "headers": [
         {
           "key": "Link",
-          "value": "</.well-known/farcaster.json>; rel=\"alternate\"; type=\"application/vnd.farcaster.snap+json\""
+          "value": "</.well-known/farcaster.json>; rel=\"alternate\"; type=\"application/json\""
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'self' https://*.warpcast.com https://warpcast.com;"
+          "value": "frame-ancestors 'self' https://*.warpcast.com https://warpcast.com https://*.farcaster.xyz https://farcaster.xyz https://*.base.org https://base.org;"
         },
         {
           "key": "Access-Control-Allow-Origin",
