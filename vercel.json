@@ -8,7 +8,7 @@
       "headers": [
         {
           "key": "Content-Type",
-          "value": "application/json; charset=utf-8"
+          "value": "application/vnd.farcaster.snap+json; charset=utf-8"
         },
         {
           "key": "Access-Control-Allow-Origin",
@@ -16,11 +16,11 @@
         },
         {
           "key": "Access-Control-Allow-Methods",
-          "value": "GET, OPTIONS"
+          "value": "GET, HEAD, OPTIONS"
         },
         {
           "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Accept"
+          "value": "*"
         },
         {
           "key": "Cache-Control",
@@ -37,7 +37,7 @@
       "headers": [
         {
           "key": "Link",
-          "value": "</.well-known/farcaster.json>; rel=\"alternate\"; type=\"application/json\""
+          "value": "</.well-known/farcaster.json>; rel=\"alternate\"; type=\"application/vnd.farcaster.snap+json\""
         },
         {
           "key": "Content-Security-Policy",
@@ -45,6 +45,14 @@
         },
         {
           "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, HEAD, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
           "value": "*"
         },
         {
