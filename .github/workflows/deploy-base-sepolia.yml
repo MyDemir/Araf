@@ -127,6 +127,8 @@ jobs:
             MASTER_ENCRYPTION_KEY="${{ secrets.MASTER_ENCRYPTION_KEY }}" \
             BASE_RPC_URL="${{ secrets.BASE_SEPOLIA_RPC_URL }}" \
             BASE_WS_RPC_URL="${{ secrets.BASE_SEPOLIA_WS_RPC_URL }}" \
+            # Keep eth_getLogs/queryFilter ranges capped for free-tier RPC limits. \
+            EVENT_QUERY_BLOCK_RANGE="10" \
             ARAF_ESCROW_ADDRESS="$ESCROW" \
             ARAF_DEPLOYMENT_BLOCK="$DEPLOY_BLOCK" \
             CHAIN_ID="84532" \
