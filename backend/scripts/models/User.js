@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema(
       unique:     true,
       lowercase:  true,
       match:      /^0x[a-fA-F0-9]{40}$/,
-      index:      true,
+      // [TR] Duplicate index uyarısını önlemek için index tanımı schema.index altında tutulur.
     },
 
     // ── Şifreli PII (AES-256-GCM) ────────────────────────────────────────────

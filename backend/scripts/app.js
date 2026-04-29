@@ -52,24 +52,41 @@ app.get("/ready", async (req, res) => {
   return res.status(readiness.ok ? 200 : 503).json(readiness);
 });
 
-const logRoutes = require("./routes/logs");
-const authRoutes = require("./routes/auth");
-const listingRoutes = require("./routes/listings");
-const tradeRoutes = require("./routes/trades");
-const piiRoutes = require("./routes/pii");
-const feedbackRoutes = require("./routes/feedback");
-const statsRoutes = require("./routes/stats");
-const receiptRoutes = require("./routes/receipts");
-app.use("/api/logs", logRoutes);
-app.use("/api/auth", authRoutes);
-app.use("/api/listings", listingRoutes);
-app.use("/api/trades", tradeRoutes);
-app.use("/api/pii", piiRoutes);
-app.use("/api/feedback", feedbackRoutes);
-app.use("/api/stats", statsRoutes);
-app.use("/api/receipts", receiptRoutes);
-app.use((req, res) => res.status(404).json({ error: "İstenen endpoint bulunamadı" }));
-app.use(globalErrorHandler);
+let apiRoutesMounted = false;
+
+/**
+ * [TR] API route'larını yalnızca dependency bootstrap sonrası yükler.
+ * Idempotent davranır; tekrar çağrılırsa yeniden mount etmez.
+ */
+function mountApiRoutes() {
+  if (apiRoutesMounted) return;
+  try {
+    const logRoutes = require("./routes/logs");
+    const authRoutes = require("./routes/auth");
+    const listingRoutes = require("./routes/listings");
+    const tradeRoutes = require("./routes/trades");
+    const piiRoutes = require("./routes/pii");
+    const feedbackRoutes = require("./routes/feedback");
+    const statsRoutes = require("./routes/stats");
+    const receiptRoutes = require("./routes/receipts");
+    app.use("/api/logs", logRoutes);
+    app.use("/api/auth", authRoutes);
+    app.use("/api/listings", listingRoutes);
+    app.use("/api/trades", tradeRoutes);
+    app.use("/api/pii", piiRoutes);
+    app.use("/api/feedback", feedbackRoutes);
+    app.use("/api/stats", statsRoutes);
+    app.use("/api/receipts", receiptRoutes);
+    app.use((req, res) => res.status(404).json({ error: "İstenen endpoint bulunamadı" }));
+    app.use(globalErrorHandler);
+    apiRoutesMounted = true;
+    logger.info("[BOOT] API route'ları mount edildi.");
+  } catch (err) {
+    apiRoutesMounted = false;
+    logger.error("[BOOT] API route mount başarısız:", err);
+    throw err;
+  }
+}
 
 function clearRuntimeSchedulers() {
   if (dlqInterval) clearInterval(dlqInterval);
@@ -132,6 +149,7 @@ async function startWorkerWithRetry() {
 async function startDependencyBootstrap() {
   try { await connectDB(); updateRuntimeState({ dbReady: true }); } catch (err) { updateRuntimeState({ dbReady: false }); markDegraded(err); }
   try { await connectRedis(); updateRuntimeState({ redisReady: true }); } catch (err) { updateRuntimeState({ redisReady: false }); markDegraded(err); }
+  mountApiRoutes();
 
   try {
     const config = await loadProtocolConfig();
@@ -142,7 +160,12 @@ async function startDependencyBootstrap() {
     markDegraded(err);
   }
 
-  const redisClient = getRedisClient();
+  let redisClient = null;
+  try {
+    redisClient = getRedisClient();
+  } catch {
+    redisClient = null;
+  }
   const mongoReady = mongoose.connection.readyState === 1;
   const redisOpen = Boolean(redisClient?.isOpen);
   if (mongoReady && redisOpen && !areSchedulersStarted()) {
@@ -163,7 +186,12 @@ async function shutdown({ signal = "UNKNOWN", exitCode = 0, reason = null }) {
     if (server?.listening) await new Promise((resolve) => server.close(resolve));
     await worker.stop();
     if (mongoose.connection.readyState !== 0) await mongoose.connection.close();
-    const redisClient = getRedisClient();
+    let redisClient = null;
+    try {
+      redisClient = getRedisClient();
+    } catch {
+      redisClient = null;
+    }
     if (redisClient?.isOpen) await redisClient.quit();
   } catch (err) {
     logger.error("[ORCHESTRATOR] Shutdown sırasında hata oluştu:", err);
