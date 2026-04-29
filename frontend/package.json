@@ -16,6 +16,8 @@
     "viem": "^2.21.0",
     "@tanstack/react-query": "^5.52.2",
     "@base-org/account": "^1.0.0",
+    "@farcaster/frame-sdk": "^0.0.20",
+    "@farcaster/frame-wagmi-connector": "^0.0.6",
     "siwe": "^2.3.2"
   },
   "devDependencies": {
