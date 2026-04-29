@@ -5,8 +5,7 @@ import './index.css'
 
 import { WagmiProvider, createConfig, http } from 'wagmi'
 import { base, baseSepolia, hardhat } from 'wagmi/chains'
-import { coinbaseWallet, injected } from 'wagmi/connectors'
-import { farcasterFrame } from '@farcaster/frame-wagmi-connector'
+import { baseAccount, coinbaseWallet, injected } from 'wagmi/connectors'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import ErrorBoundary from './components/ErrorBoundary.jsx'
@@ -47,8 +46,8 @@ for (const chain of activeChains) {
 const config = createConfig({
   chains: activeChains,
   connectors: [
-    farcasterFrame(),
     injected(),
+    baseAccount({ appName: 'Araf Protocol' }),
     coinbaseWallet({ appName: 'Araf Protocol' }),
   ],
   transports,
