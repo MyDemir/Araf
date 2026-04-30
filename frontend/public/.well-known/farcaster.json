@@ -1,8 +1,27 @@
 {
   "accountAssociation": {
-    "header": "eyJmaWQiOjMwNzYwNTYsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHg3MjcwZjRFYjM1QTBmOUVjNDU1OWYyN0QxODY0RjFiRDE5MDczNjgwIn0",
+    "header": "eyJmaWQiOjMwNzYwNTYsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHg1NUI2MUE2Q0NEMWRlOTJDNEMwQzkwOUE2QUFGNTBEQjcwNUZjOTBBIn0",
     "payload": "eyJkb21haW4iOiJhcmFmLXByb3RvY29sLWRlbW8udmVyY2VsLmFwcCJ9",
-    "signature": "Jc0nN3d4i3TpaSpppmVUia9xlAmTnl4vFpC/jirl9RZoDaLsscLh6RDZ95FQxTgiUQ+1dKgwi+bIj/5acF8U5Bw="
+    "signature": "8ydHffyLr/Dwu54T2sMeHww/ONSsSzK9nLyt1Ooo47AN0dJq122eCIiA3vITbQNEwHrtCcYRb2Gb+BSy5tEe7Bs="
+  },
+  "miniapp": {
+    "version": "1",
+    "name": "Araf Protocol",
+    "iconUrl": "https://araf-protocol-demo.vercel.app/icon.png",
+    "homeUrl": "https://araf-protocol-demo.vercel.app",
+    "imageUrl": "https://araf-protocol-demo.vercel.app/og-image.png",
+    "buttonTitle": "Launch Araf",
+    "splashImageUrl": "https://araf-protocol-demo.vercel.app/splash.png",
+    "splashBackgroundColor": "#060608",
+    "subtitle": "Escrow on Base",
+    "tagline": "Trust the time, not the oracle",
+    "description": "Non-custodial P2P escrow built for Base.",
+    "primaryCategory": "finance",
+    "tags": ["escrow", "p2p", "base"],
+    "heroImageUrl": "https://araf-protocol-demo.vercel.app/hero.png",
+    "ogTitle": "Araf Protocol",
+    "ogDescription": "Non-custodial P2P escrow on Base.",
+    "ogImageUrl": "https://araf-protocol-demo.vercel.app/og-image.png"
   },
   "frame": {
     "version": "1",
@@ -12,6 +31,15 @@
     "imageUrl": "https://araf-protocol-demo.vercel.app/og-image.png",
     "buttonTitle": "Launch Araf",
     "splashImageUrl": "https://araf-protocol-demo.vercel.app/splash.png",
-    "splashBackgroundColor": "#eeccff"
+    "splashBackgroundColor": "#060608",
+    "subtitle": "Escrow on Base",
+    "tagline": "Trust the time, not the oracle",
+    "description": "Non-custodial P2P escrow built for Base.",
+    "primaryCategory": "finance",
+    "tags": ["escrow", "p2p", "base"],
+    "heroImageUrl": "https://araf-protocol-demo.vercel.app/hero.png",
+    "ogTitle": "Araf Protocol",
+    "ogDescription": "Non-custodial P2P escrow on Base.",
+    "ogImageUrl": "https://araf-protocol-demo.vercel.app/og-image.png"
   }
 }
